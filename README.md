@@ -17,22 +17,13 @@ In this repository you will find the following branches:
 
 ---
 
-## Notes
-
-- **Please open a [new issue](https://github.com/iotaledger/hornet/issues/new) if you detect an error or crash (or submit a PR if you have already fixed it).**
-- **The issue section is not a support section, if you have questions about LOCKBOX please post them in the `#lockbox` channel ([official iota discord server](https://discord.iota.org/)).**
-
----
-
 _Table of contents_
 
 <!--ts-->
 
 - [LOCKBOX - The IOTA node](#hornet---the-iota-node)
-  - [Notes](#notes)
   - [Documentation](#documentation)
   - [Configuration](#configuration)
-  - [Contributing](#contributing)
 <!--te-->
 
 ## Documentation
@@ -43,8 +34,3 @@ Hornet documentation can be found here: https://wiki.iota.org/hornet/welcome
 ## Configuration
 
 An overview over all configuration parameters can be found [here.](configuration.md)
-
-
-## Contributing
-
-- See [CONTRIBUTING](/CONTRIBUTING.md)
