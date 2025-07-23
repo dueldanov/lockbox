@@ -14,6 +14,7 @@ import (
 	"github.com/iotaledger/hornet/v2/components/debug"
 	"github.com/iotaledger/hornet/v2/components/gossip"
 	"github.com/iotaledger/hornet/v2/components/inx"
+	"github.com/iotaledger/hornet/v2/components/lockbox"
 	"github.com/iotaledger/hornet/v2/components/p2p"
 	"github.com/iotaledger/hornet/v2/components/pow"
 	"github.com/iotaledger/hornet/v2/components/profile"
@@ -30,10 +31,9 @@ import (
 )
 
 var (
-	// Name of the app.
-	Name = "HORNET"
-
-	// Version of the app.
+	// Name is now LockSmith
+	Name = "LockSmith"
+	// Version remains the same but will be branded as LockSmith
 	Version = "2.0.2"
 )
 
@@ -43,7 +43,7 @@ func App() *app.App {
 		app.WithUsageText(fmt.Sprintf(`Usage of %s (%s %s):
 
 Run '%s tools' to list all available tools.
-		
+
 Command line flags:
 `, os.Args[0], Name, Version, os.Args[0])),
 		app.WithInitComponent(InitComponent),
@@ -69,6 +69,7 @@ Command line flags:
 			inx.Component,
 			dashboard_metrics.Component,
 			debug.Component,
+			lockbox.Component, // Add LockBox component
 		),
 	)
 }
@@ -103,10 +104,8 @@ func init() {
 }
 
 func initialize(_ *app.App) error {
-
 	if toolset.ShouldHandleTools() {
 		toolset.HandleTools()
-		// HandleTools will call os.Exit
 	}
 
 	return nil
