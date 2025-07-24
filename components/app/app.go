@@ -4,10 +4,10 @@ import (
     "fmt"
     "os"
 
-    "github.com/iotaledger/hive.go/app"
-    "github.com/iotaledger/hive.go/app/components/profiling"
-    "github.com/iotaledger/hive.go/app/components/shutdown"
-    "github.com/iotaledger/lockbox/v2/components/autopeering"
+	"github.com/iotaledger/hive.go/app"
+	"github.com/iotaledger/hive.go/app/components/profiling"
+	"github.com/iotaledger/hive.go/app/components/shutdown"
+	    "github.com/iotaledger/lockbox/v2/components/autopeering"
     "github.com/iotaledger/lockbox/v2/components/coreapi"
     dashboard_metrics "github.com/iotaledger/lockbox/v2/components/dashboard-metrics"
     "github.com/iotaledger/lockbox/v2/components/database"
@@ -30,8 +30,10 @@ import (
 )
 
 var (
-    Name    = "LockBox"
-    Version = "1.0.0"
+	// Name is now LockSmith
+	Name = "LockSmith"
+	// Version remains the same but will be branded as LockSmith
+	Version = "2.0.2"
 )
 
 func App() *app.App {
