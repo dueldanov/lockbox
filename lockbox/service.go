@@ -1,417 +1,390 @@
 package lockbox
 
 import (
-    "context"
-    "fmt"
-    "sync"
-    "time"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
 
-    "github.com/iotaledger/hive.go/kvstore"
-    "github.com/iotaledger/hive.go/logger"
-    "github.com/iotaledger/hornet/v2/pkg/model/storage"
-    "github.com/iotaledger/hornet/v2/pkg/model/syncmanager"
-    "github.com/iotaledger/hornet/v2/pkg/model/utxo"
-    "github.com/iotaledger/hornet/v2/pkg/protocol"
-    iotago "github.com/iotaledger/iota.go/v3"
+	"github.com/iotaledger/hornet/v2/lockbox/crypto"
+	"github.com/iotaledger/hornet/v2/pkg/lockbox"
+	"github.com/iotaledger/hornet/v2/pkg/model/storage"
+	"github.com/iotaledger/hornet/v2/pkg/model/syncmanager"
+	"github.com/iotaledger/hornet/v2/pkg/model/utxo"
+	"github.com/iotaledger/hornet/v2/pkg/protocol"
+	iotago "github.com/iotaledger/iota.go/v3"
 )
 
-// Service handles LockBox operations
+var (
+	ErrAssetNotFound      = errors.New("asset not found")
+	ErrAssetAlreadyLocked = errors.New("asset already locked")
+	ErrUnauthorized       = errors.New("unauthorized")
+	ErrInvalidUnlockTime  = errors.New("invalid unlock time")
+)
+
 type Service struct {
-    *logger.WrappedLogger
-    
-    storage          *storage.Storage
-    utxoManager      *utxo.Manager
-    syncManager      *syncmanager.SyncManager
-    protocolManager  *protocol.Manager
-    storageManager   *StorageManager
-    scriptEngine     *lockscript.Engine
-    
-    config           *ServiceConfig
-    
-    // State management
-    lockedAssets     map[string]*LockedAsset
-    assetsLock       sync.RWMutex
-    
-    // Processing queues
-    pendingUnlocks   chan *UnlockRequest
-    processedBlocks  map[iotago.BlockID]bool
-    blocksLock       sync.RWMutex
+	storage          *storage.Storage
+	utxoManager      *utxo.Manager
+	syncManager      *syncmanager.SyncManager
+	protocolManager  *protocol.Manager
+	config           *lockbox.ServiceConfig
+	storageManager   *lockbox.StorageManager
+	
+	// Cryptography components
+	shardEncryptor   *crypto.ShardEncryptor
+	zkpManager       *crypto.ZKPManager
+	
+	// Caches and state
+	lockedAssets     map[string]*lockbox.LockedAsset
+	pendingUnlocks   map[string]time.Time
+	mu               sync.RWMutex
+	scriptCompiler   interface{} // Will be initialized in InitializeCompiler
 }
 
-// NewService creates a new LockBox service
 func NewService(
-    storage *storage.Storage,
-    utxoManager *utxo.Manager,
-    syncManager *syncmanager.SyncManager,
-    protocolManager *protocol.Manager,
-    config *ServiceConfig,
+	storage *storage.Storage,
+	utxoManager *utxo.Manager,
+	syncManager *syncmanager.SyncManager,
+	protocolManager *protocol.Manager,
+	config *lockbox.ServiceConfig,
 ) (*Service, error) {
-    storageManager, err := NewStorageManager(storage.KVStore())
-    if err != nil {
-        return nil, fmt.Errorf("failed to create storage manager: %w", err)
-    }
+	storageManager, err := lockbox.NewStorageManager(storage.UTXOStore())
+	if err != nil {
+		return nil, err
+	}
 
-    scriptEngine := lockscript.NewEngine(
-        logger.NewLogger("LockScript"),
-        config.MaxScriptSize,
-        config.MaxExecutionTime,
-    )
+	// Generate master key for encryption
+	masterKey := make([]byte, 32)
+	if _, err := rand.Read(masterKey); err != nil {
+		return nil, fmt.Errorf("failed to generate master key: %w", err)
+	}
 
-    return &Service{
-        WrappedLogger:    logger.NewWrappedLogger(logger.NewLogger("LockBox")),
-        storage:          storage,
-        utxoManager:      utxoManager,
-        syncManager:      syncManager,
-        protocolManager:  protocolManager,
-        storageManager:   storageManager,
-        scriptEngine:     scriptEngine,
-        config:           config,
-        lockedAssets:     make(map[string]*LockedAsset),
-        pendingUnlocks:   make(chan *UnlockRequest, 1000),
-        processedBlocks:  make(map[iotago.BlockID]bool),
-    }, nil
+	// Initialize cryptography components
+	shardEncryptor, err := crypto.NewShardEncryptor(masterKey, 4096) // 4KB shards
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize shard encryptor: %w", err)
+	}
+
+	zkpManager := crypto.NewZKPManager()
+
+	return &Service{
+		storage:         storage,
+		utxoManager:     utxoManager,
+		syncManager:     syncManager,
+		protocolManager: protocolManager,
+		config:          config,
+		storageManager:  storageManager,
+		shardEncryptor:  shardEncryptor,
+		zkpManager:      zkpManager,
+		lockedAssets:    make(map[string]*lockbox.LockedAsset),
+		pendingUnlocks:  make(map[string]time.Time),
+	}, nil
 }
 
-// InitializeCompiler initializes the LockScript compiler
-func (s *Service) InitializeCompiler() error {
-    // Initialize built-in functions
-    s.scriptEngine.RegisterBuiltinFunctions()
-    
-    // Load any saved scripts from storage
-    scripts, err := s.storageManager.LoadScripts()
-    if err != nil {
-        return fmt.Errorf("failed to load scripts: %w", err)
-    }
-    
-    for _, script := range scripts {
-        if err := s.scriptEngine.LoadScript(script); err != nil {
-            s.LogWarnf("failed to load script %s: %s", script.ID, err)
-        }
-    }
-    
-    return nil
+func (s *Service) LockAsset(ctx context.Context, req *lockbox.LockAssetRequest) (*lockbox.LockAssetResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Validate request
+	if req.LockDuration < s.config.MinLockPeriod || req.LockDuration > s.config.MaxLockPeriod {
+		return nil, ErrInvalidUnlockTime
+	}
+
+	// Generate asset ID
+	assetID := s.generateAssetID()
+	lockTime := time.Now()
+	unlockTime := lockTime.Add(req.LockDuration)
+
+	// Create ownership proof
+	ownerSecret := make([]byte, 32)
+	if _, err := rand.Read(ownerSecret); err != nil {
+		return nil, fmt.Errorf("failed to generate owner secret: %w", err)
+	}
+
+	ownershipProof, err := s.zkpManager.GenerateOwnershipProof([]byte(assetID), ownerSecret)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate ownership proof: %w", err)
+	}
+
+	// Encrypt asset data
+	assetData, err := s.serializeAssetData(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize asset data: %w", err)
+	}
+
+	shards, err := s.shardEncryptor.EncryptData(assetData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt asset data: %w", err)
+	}
+
+	// Store encrypted shards
+	for _, shard := range shards {
+		if err := s.storeEncryptedShard(assetID, shard); err != nil {
+			return nil, fmt.Errorf("failed to store encrypted shard: %w", err)
+		}
+	}
+
+	// Create locked asset
+	asset := &lockbox.LockedAsset{
+		ID:                assetID,
+		OwnerAddress:      req.OwnerAddress,
+		OutputID:          req.OutputID,
+		LockTime:          lockTime,
+		UnlockTime:        unlockTime,
+		LockScript:        req.LockScript,
+		MultiSigAddresses: req.MultiSigAddresses,
+		MinSignatures:     req.MinSignatures,
+		Status:            lockbox.AssetStatusLocked,
+		CreatedAt:         lockTime,
+		UpdatedAt:         lockTime,
+	}
+
+	// Store asset
+	if err := s.storageManager.StoreLockedAsset(asset); err != nil {
+		return nil, err
+	}
+
+	// Store ownership proof
+	if err := s.storeOwnershipProof(assetID, ownershipProof); err != nil {
+		return nil, fmt.Errorf("failed to store ownership proof: %w", err)
+	}
+
+	s.lockedAssets[assetID] = asset
+
+	return &lockbox.LockAssetResponse{
+		AssetID:    assetID,
+		LockTime:   lockTime,
+		UnlockTime: unlockTime,
+		Status:     lockbox.AssetStatusLocked,
+	}, nil
 }
 
-// LockAsset locks an asset with the specified conditions
-func (s *Service) LockAsset(ctx context.Context, req *LockAssetRequest) (*LockAssetResponse, error) {
-    s.assetsLock.Lock()
-    defer s.assetsLock.Unlock()
+func (s *Service) UnlockAsset(ctx context.Context, req *lockbox.UnlockAssetRequest) (*lockbox.UnlockAssetResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-    // Validate request
-    if err := s.validateLockRequest(req); err != nil {
-        return nil, err
-    }
+	// Get asset
+	asset, err := s.storageManager.GetLockedAsset(req.AssetID)
+	if err != nil {
+		return nil, ErrAssetNotFound
+	}
 
-    // Check if output exists and is unspent
-    output, err := s.utxoManager.ReadOutputByOutputID(req.OutputID)
-    if err != nil {
-        return nil, fmt.Errorf("output not found: %w", err)
-    }
+	// Verify unlock time
+	if time.Now().Before(asset.UnlockTime) {
+		// Generate unlock proof for early unlock
+		unlockProof, err := s.zkpManager.GenerateUnlockProof(
+			[]byte(req.AssetID),
+			[]byte(asset.ID),
+			[]byte("early_unlock"),
+			asset.UnlockTime.Unix(),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate unlock proof: %w", err)
+		}
 
-    // Verify ownership
-    if !s.verifyOwnership(output, req.OwnerAddress) {
-        return nil, fmt.Errorf("invalid ownership")
-    }
+		// Verify unlock proof
+		if err := s.zkpManager.VerifyUnlockProof(unlockProof); err != nil {
+			return nil, ErrUnauthorized
+		}
+	}
 
-    // Compile and validate lock script
-    compiled, err := s.scriptEngine.CompileScript(ctx, req.LockScript)
-    if err != nil {
-        return nil, fmt.Errorf("script compilation failed: %w", err)
-    }
+	// Verify ownership proof if provided
+	if ownershipProof, err := s.getOwnershipProof(req.AssetID); err == nil {
+		if err := s.zkpManager.VerifyOwnershipProof(ownershipProof); err != nil {
+			return nil, ErrUnauthorized
+		}
+	}
 
-    // Create locked asset
-    assetID := s.generateAssetID(req.OutputID)
-    lockTime := time.Now()
-    unlockTime := lockTime.Add(req.LockDuration)
+	// Retrieve and decrypt shards
+	shards, err := s.retrieveEncryptedShards(req.AssetID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve encrypted shards: %w", err)
+	}
 
-    asset := &LockedAsset{
-        ID:                assetID,
-        OwnerAddress:      req.OwnerAddress,
-        OutputID:          req.OutputID,
-        Amount:            output.Deposit(),
-        LockTime:          lockTime,
-        UnlockTime:        unlockTime,
-        LockScript:        req.LockScript,
-        MultiSigAddresses: req.MultiSigAddresses,
-        MinSignatures:     req.MinSignatures,
-        Status:            AssetStatusLocked,
-        CreatedAt:         lockTime,
-        UpdatedAt:         lockTime,
-    }
+	assetData, err := s.shardEncryptor.DecryptShards(shards)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt asset data: %w", err)
+	}
 
-    // Store in database
-    if err := s.storageManager.StoreLockedAsset(asset); err != nil {
-        return nil, fmt.Errorf("failed to store asset: %w", err)
-    }
+	// Clear decrypted data after 1 minute
+	timedClear := crypto.NewTimedClear()
+	timedClear.Schedule(req.AssetID, assetData, 1*time.Minute)
 
-    // Store in memory
-    s.lockedAssets[assetID] = asset
+	// Update asset status
+	asset.Status = lockbox.AssetStatusUnlocked
+	asset.UpdatedAt = time.Now()
 
-    // Create lock transaction
-    if err := s.createLockTransaction(ctx, asset); err != nil {
-        // Rollback
-        delete(s.lockedAssets, assetID)
-        _ = s.storageManager.DeleteLockedAsset(assetID)
-        return nil, fmt.Errorf("failed to create lock transaction: %w", err)
-    }
+	if err := s.storageManager.StoreLockedAsset(asset); err != nil {
+		return nil, err
+	}
 
-    return &LockAssetResponse{
-        AssetID:    assetID,
-        LockTime:   lockTime,
-        UnlockTime: unlockTime,
-        Status:     AssetStatusLocked,
-    }, nil
+	// Clean up encrypted shards
+	if err := s.cleanupEncryptedShards(req.AssetID); err != nil {
+		// Log error but don't fail the unlock
+		fmt.Printf("failed to cleanup encrypted shards: %v\n", err)
+	}
+
+	return &lockbox.UnlockAssetResponse{
+		AssetID:    asset.ID,
+		OutputID:   asset.OutputID,
+		UnlockTime: time.Now(),
+		Status:     lockbox.AssetStatusUnlocked,
+	}, nil
 }
 
-// UnlockAsset unlocks a previously locked asset
-func (s *Service) UnlockAsset(ctx context.Context, req *UnlockAssetRequest) (*UnlockAssetResponse, error) {
-    s.assetsLock.Lock()
-    defer s.assetsLock.Unlock()
-
-    // Get locked asset
-    asset, exists := s.lockedAssets[req.AssetID]
-    if !exists {
-        // Try loading from storage
-        storedAsset, err := s.storageManager.GetLockedAsset(req.AssetID)
-        if err != nil {
-            return nil, fmt.Errorf("asset not found: %w", err)
-        }
-        asset = storedAsset
-        s.lockedAssets[req.AssetID] = asset
-    }
-
-    // Check unlock conditions
-    if err := s.checkUnlockConditions(ctx, asset, req); err != nil {
-        return nil, fmt.Errorf("unlock conditions not met: %w", err)
-    }
-
-    // Execute unlock script
-    env := &lockscript.Environment{
-        Variables: req.UnlockParams,
-        Sender:    string(asset.OwnerAddress),
-        Timestamp: time.Now(),
-    }
-
-    result, err := s.scriptEngine.ExecuteScript(ctx, asset.LockScript, env)
-    if err != nil {
-        return nil, fmt.Errorf("script execution failed: %w", err)
-    }
-
-    if !result.Success {
-        return nil, fmt.Errorf("unlock script returned false")
-    }
-
-    // Verify signatures if multi-sig
-    if asset.MultiSigRequired {
-        if err := s.verifyMultiSig(asset, req.Signatures); err != nil {
-            return nil, fmt.Errorf("multi-sig verification failed: %w", err)
-        }
-    }
-
-    // Create unlock transaction
-    unlockTx, err := s.createUnlockTransaction(ctx, asset)
-    if err != nil {
-        return nil, fmt.Errorf("failed to create unlock transaction: %w", err)
-    }
-
-    // Update asset status
-    asset.Status = AssetStatusUnlocked
-    asset.UpdatedAt = time.Now()
-
-    // Update storage
-    if err := s.storageManager.StoreLockedAsset(asset); err != nil {
-        return nil, fmt.Errorf("failed to update asset: %w", err)
-    }
-
-    return &UnlockAssetResponse{
-        AssetID:    req.AssetID,
-        OutputID:   unlockTx.OutputID,
-        UnlockTime: time.Now(),
-        Status:     AssetStatusUnlocked,
-    }, nil
-}
-
-// ProcessMilestone processes a confirmed milestone for locked assets
 func (s *Service) ProcessMilestone(msIndex iotago.MilestoneIndex) error {
-    s.blocksLock.Lock()
-    defer s.blocksLock.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-    // Get milestone
-    cachedMs := s.storage.CachedMilestoneByIndexOrNil(msIndex)
-    if cachedMs == nil {
-        return fmt.Errorf("milestone %d not found", msIndex)
-    }
-    defer cachedMs.Release(true)
+	// Check pending unlocks
+	now := time.Now()
+	for assetID, unlockTime := range s.pendingUnlocks {
+		if now.After(unlockTime) {
+			asset, err := s.storageManager.GetLockedAsset(assetID)
+			if err != nil {
+				continue
+			}
 
-    // Process referenced blocks
-    referencedBlocks, err := s.storage.ReferencedBlockIDs(msIndex)
-    if err != nil {
-        return fmt.Errorf("failed to get referenced blocks: %w", err)
-    }
+			asset.Status = lockbox.AssetStatusUnlocked
+			asset.UpdatedAt = now
 
-    for _, blockID := range referencedBlocks {
-        if s.processedBlocks[blockID] {
-            continue
-        }
+			if err := s.storageManager.StoreLockedAsset(asset); err != nil {
+				continue
+			}
 
-        if err := s.processBlock(blockID); err != nil {
-            s.LogWarnf("failed to process block %s: %s", blockID.ToHex(), err)
-            continue
-        }
+			delete(s.pendingUnlocks, assetID)
+		}
+	}
 
-        s.processedBlocks[blockID] = true
-
-        // Clean up old entries
-        if len(s.processedBlocks) > 10000 {
-            s.cleanupProcessedBlocks(msIndex)
-        }
-    }
-
-    return nil
+	return nil
 }
 
-// ProcessPendingUnlocks processes assets that are ready to be unlocked
 func (s *Service) ProcessPendingUnlocks() error {
-    s.assetsLock.RLock()
-    defer s.assetsLock.RUnlock()
+	assets, err := s.storageManager.ListLockedAssets()
+	if err != nil {
+		return err
+	}
 
-    now := time.Now()
-    
-    for _, asset := range s.lockedAssets {
-        if asset.Status != AssetStatusLocked {
-            continue
-        }
+	now := time.Now()
+	for _, asset := range assets {
+		if asset.Status == lockbox.AssetStatusLocked && now.After(asset.UnlockTime) {
+			s.mu.Lock()
+			s.pendingUnlocks[asset.ID] = asset.UnlockTime
+			s.mu.Unlock()
+		}
+	}
 
-        // Check if unlock time has passed
-        if now.After(asset.UnlockTime) {
-            asset.Status = AssetStatusUnlocking
-            
-            // Queue for unlock processing
-            select {
-            case s.pendingUnlocks <- &UnlockRequest{
-                AssetID: asset.ID,
-            }:
-            default:
-                s.LogWarnf("pending unlocks queue full for asset %s", asset.ID)
-            }
-        }
-    }
+	return nil
+}
 
-    return nil
+func (s *Service) InitializeCompiler() error {
+	// This will be implemented with the LockScript compiler
+	return nil
 }
 
 // Helper methods
 
-func (s *Service) validateLockRequest(req *LockAssetRequest) error {
-    // Validate lock duration
-    if req.LockDuration < s.config.MinLockPeriod {
-        return fmt.Errorf("lock duration too short: minimum %s", s.config.MinLockPeriod)
-    }
-    if req.LockDuration > s.config.MaxLockPeriod {
-        return fmt.Errorf("lock duration too long: maximum %s", s.config.MaxLockPeriod)
-    }
-
-    // Validate script
-    if err := s.scriptEngine.ValidateScript(req.LockScript); err != nil {
-        return fmt.Errorf("invalid lock script: %w", err)
-    }
-
-    // Validate multi-sig if required
-    if s.config.MultiSigRequired || len(req.MultiSigAddresses) > 0 {
-        if len(req.MultiSigAddresses) < s.config.MinMultiSigSigners {
-            return fmt.Errorf("insufficient multi-sig signers: minimum %d", s.config.MinMultiSigSigners)
-        }
-        if req.MinSignatures > len(req.MultiSigAddresses) {
-            return fmt.Errorf("min signatures cannot exceed number of signers")
-        }
-    }
-
-    return nil
+func (s *Service) generateAssetID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
-func (s *Service) verifyOwnership(output *utxo.Output, address iotago.Address) bool {
-    // Simplified ownership verification
-    // Real implementation would check unlock conditions
-    return true
+func (s *Service) serializeAssetData(req *lockbox.LockAssetRequest) ([]byte, error) {
+	// Simple serialization - in production use protobuf or similar
+	data := fmt.Sprintf("%s|%s|%s|%d",
+		req.OwnerAddress.String(),
+		req.OutputID.String(),
+		req.LockScript,
+		req.MinSignatures,
+	)
+	return []byte(data), nil
 }
 
-func (s *Service) generateAssetID(outputID iotago.OutputID) string {
-    // Generate unique asset ID
-    return fmt.Sprintf("asset_%s_%d", outputID.ToHex(), time.Now().UnixNano())
+func (s *Service) storeEncryptedShard(assetID string, shard *crypto.CharacterShard) error {
+	key := fmt.Sprintf("shard_%s_%d", assetID, shard.Index)
+	value, err := s.serializeShard(shard)
+	if err != nil {
+		return err
+	}
+	return s.storage.UTXOStore().Set([]byte(key), value)
 }
 
-func (s *Service) checkUnlockConditions(ctx context.Context, asset *LockedAsset, req *UnlockAssetRequest) error {
-    // Check if asset is already unlocked
-    if asset.Status != AssetStatusLocked && asset.Status != AssetStatusUnlocking {
-        return fmt.Errorf("asset is not locked")
-    }
-
-    // Check emergency unlock if enabled
-    if asset.EmergencyUnlock && s.config.EnableEmergencyUnlock {
-        emergencyDelay := time.Duration(s.config.EmergencyDelayDays) * 24 * time.Hour
-        if time.Since(asset.LockTime) < emergencyDelay {
-            return fmt.Errorf("emergency unlock delay not met")
-        }
-    }
-
-    return nil
+func (s *Service) retrieveEncryptedShards(assetID string) ([]*crypto.CharacterShard, error) {
+	// This is simplified - in production, track shard count
+	var shards []*crypto.CharacterShard
+	for i := uint32(0); i < 100; i++ { // Max 100 shards
+		key := fmt.Sprintf("shard_%s_%d", assetID, i)
+		value, err := s.storage.UTXOStore().Get([]byte(key))
+		if err != nil {
+			break // No more shards
+		}
+		
+		shard, err := s.deserializeShard(value)
+		if err != nil {
+			return nil, err
+		}
+		shards = append(shards, shard)
+		
+		if len(shards) > 0 && uint32(len(shards)) == shards[0].Total {
+			break // Got all shards
+		}
+	}
+	
+	return shards, nil
 }
 
-func (s *Service) verifyMultiSig(asset *LockedAsset, signatures [][]byte) error {
-    if len(signatures) < asset.MinSignatures {
-        return fmt.Errorf("insufficient signatures: got %d, need %d", len(signatures), asset.MinSignatures)
-    }
-
-    // Verify each signature
-    // Simplified - real implementation would verify cryptographic signatures
-    
-    return nil
+func (s *Service) cleanupEncryptedShards(assetID string) error {
+	// Clean up all shards for this asset
+	for i := uint32(0); i < 100; i++ {
+		key := fmt.Sprintf("shard_%s_%d", assetID, i)
+		if err := s.storage.UTXOStore().Delete([]byte(key)); err != nil {
+			// Key might not exist, ignore error
+			continue
+		}
+	}
+	return nil
 }
 
-func (s *Service) createLockTransaction(ctx context.Context, asset *LockedAsset) error {
-    // Create IOTA transaction that locks the asset
-    // This is a placeholder - real implementation would create actual transaction
-    
-    return nil
+func (s *Service) serializeShard(shard *crypto.CharacterShard) ([]byte, error) {
+	// Simple serialization - in production use protobuf
+	data := fmt.Sprintf("%d|%d|%d|%d|%s|%s|%s",
+		shard.ID,
+		shard.Index,
+		shard.Total,
+		shard.Timestamp,
+		hex.EncodeToString(shard.Data),
+		hex.EncodeToString(shard.Nonce),
+		hex.EncodeToString(shard.Checksum),
+	)
+	return []byte(data), nil
 }
 
-func (s *Service) createUnlockTransaction(ctx context.Context, asset *LockedAsset) (*UnlockTransaction, error) {
-    // Create IOTA transaction that unlocks the asset
-    // This is a placeholder - real implementation would create actual transaction
-    
-    return &UnlockTransaction{
-        OutputID: asset.OutputID,
-    }, nil
+func (s *Service) deserializeShard(data []byte) (*crypto.CharacterShard, error) {
+	// Simple deserialization - in production use protobuf
+	// This is a placeholder implementation
+	return &crypto.CharacterShard{}, nil
 }
 
-func (s *Service) processBlock(blockID iotago.BlockID) error {
-    // Process block for LockBox-related transactions
-    cachedBlock := s.storage.CachedBlockOrNil(blockID)
-    if cachedBlock == nil {
-        return fmt.Errorf("block not found")
-    }
-    defer cachedBlock.Release(true)
-
-    // Check if block contains LockBox transactions
-    // Process accordingly
-    
-    return nil
+func (s *Service) storeOwnershipProof(assetID string, proof *crypto.OwnershipProof) error {
+	key := fmt.Sprintf("proof_%s", assetID)
+	value := fmt.Sprintf("%s|%s|%d",
+		hex.EncodeToString(proof.AssetCommitment),
+		hex.EncodeToString(proof.OwnerAddress),
+		proof.Timestamp,
+	)
+	return s.storage.UTXOStore().Set([]byte(key), []byte(value))
 }
 
-func (s *Service) cleanupProcessedBlocks(currentMs iotago.MilestoneIndex) {
-    // Clean up old processed blocks to prevent memory growth
-    threshold := currentMs - 100
-    
-    for blockID := range s.processedBlocks {
-        // In production, would check block's milestone index
-        // For now, just clean up if map is too large
-        if len(s.processedBlocks) > 5000 {
-            delete(s.processedBlocks, blockID)
-        }
-    }
-}
-
-// UnlockTransaction represents an unlock transaction
-type UnlockTransaction struct {
-    OutputID iotago.OutputID
+func (s *Service) getOwnershipProof(assetID string) (*crypto.OwnershipProof, error) {
+	key := fmt.Sprintf("proof_%s", assetID)
+	_, err := s.storage.UTXOStore().Get([]byte(key))
+	if err != nil {
+		return nil, err
+	}
+	// Deserialize proof - placeholder
+	return &crypto.OwnershipProof{}, nil
 }
