@@ -1,0 +1,315 @@
+package crypto
+
+import (
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"sync"
+	"time"
+
+	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/chacha20poly1305"
+)
+
+var (
+	ErrInvalidShardSize     = errors.New("invalid shard size")
+	ErrInvalidShardCount    = errors.New("invalid shard count")
+	ErrShardDecryptionFailed = errors.New("shard decryption failed")
+	ErrInsufficientShards   = errors.New("insufficient shards for reconstruction")
+)
+
+const (
+	// Shard parameters
+	MinShardSize = 32
+	MaxShardSize = 1024 * 1024 // 1MB
+	
+	// Argon2 parameters for key derivation
+	Argon2Time    = 1
+	Argon2Memory  = 64 * 1024
+	Argon2Threads = 4
+	Argon2KeyLen  = 32
+)
+
+// CharacterShard represents an encrypted shard of data
+type CharacterShard struct {
+	ID        uint32
+	Index     uint32
+	Total     uint32
+	Data      []byte
+	Nonce     []byte
+	Timestamp int64
+	Checksum  []byte
+}
+
+// ShardEncryptor handles character shard encryption and decryption
+type ShardEncryptor struct {
+	mu           sync.RWMutex
+	hkdfManager  *HKDFManager
+	shardSize    int
+	secureMemory *SecureMemoryPool
+}
+
+// NewShardEncryptor creates a new shard encryptor
+func NewShardEncryptor(masterKey []byte, shardSize int) (*ShardEncryptor, error) {
+	if shardSize < MinShardSize || shardSize > MaxShardSize {
+		return nil, fmt.Errorf("%w: size must be between %d and %d", ErrInvalidShardSize, MinShardSize, MaxShardSize)
+	}
+
+	hkdfManager, err := NewHKDFManager(masterKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ShardEncryptor{
+		hkdfManager:  hkdfManager,
+		shardSize:    shardSize,
+		secureMemory: NewSecureMemoryPool(10), // Pool of 10 secure buffers
+	}, nil
+}
+
+// EncryptData encrypts data and splits it into character shards
+func (e *ShardEncryptor) EncryptData(data []byte) ([]*CharacterShard, error) {
+	e.mu.RLock()
+	shardSize := e.shardSize
+	e.mu.RUnlock()
+
+	// Calculate number of shards needed
+	dataLen := len(data)
+	numShards := (dataLen + shardSize - 1) / shardSize
+	
+	if numShards == 0 {
+		return nil, ErrInvalidShardCount
+	}
+
+	shards := make([]*CharacterShard, numShards)
+	shardID := generateShardID()
+
+	// Process each shard
+	for i := 0; i < numShards; i++ {
+		start := i * shardSize
+		end := start + shardSize
+		if end > dataLen {
+			end = dataLen
+		}
+
+		// Get shard data
+		shardData := data[start:end]
+
+		// Encrypt shard
+		encryptedShard, err := e.encryptShard(shardData, shardID, uint32(i), uint32(numShards))
+		if err != nil {
+			// Clean up already created shards
+			for j := 0; j < i; j++ {
+				clearBytes(shards[j].Data)
+			}
+			return nil, fmt.Errorf("failed to encrypt shard %d: %w", i, err)
+		}
+
+		shards[i] = encryptedShard
+	}
+
+	return shards, nil
+}
+
+// encryptShard encrypts a single shard
+func (e *ShardEncryptor) encryptShard(data []byte, shardID uint32, index uint32, total uint32) (*CharacterShard, error) {
+	// Derive key for this shard
+	shardKey, err := e.hkdfManager.DeriveKeyForShard(shardID + index)
+	if err != nil {
+		return nil, err
+	}
+	defer clearBytes(shardKey)
+
+	// Create cipher
+	aead, err := chacha20poly1305.NewX(shardKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	// Generate nonce
+	nonce := make([]byte, NonceSize)
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	}
+
+	// Additional data for AEAD
+	additionalData := make([]byte, 12)
+	binary.BigEndian.PutUint32(additionalData[0:4], shardID)
+	binary.BigEndian.PutUint32(additionalData[4:8], index)
+	binary.BigEndian.PutUint32(additionalData[8:12], total)
+
+	// Get secure buffer for encryption
+	secureBuffer := e.secureMemory.Get()
+	defer e.secureMemory.Put(secureBuffer)
+
+	// Encrypt data
+	ciphertext := aead.Seal(nil, nonce, data, additionalData)
+
+	// Calculate checksum
+	checksum := calculateChecksum(ciphertext)
+
+	return &CharacterShard{
+		ID:        shardID,
+		Index:     index,
+		Total:     total,
+		Data:      ciphertext,
+		Nonce:     nonce,
+		Timestamp: time.Now().Unix(),
+		Checksum:  checksum,
+	}, nil
+}
+
+// DecryptShards decrypts and reconstructs data from character shards
+func (e *ShardEncryptor) DecryptShards(shards []*CharacterShard) ([]byte, error) {
+	if len(shards) == 0 {
+		return nil, ErrInsufficientShards
+	}
+
+	// Verify all shards belong to same set
+	shardID := shards[0].ID
+	totalShards := shards[0].Total
+
+	// Create map for ordering shards
+	shardMap := make(map[uint32]*CharacterShard)
+	
+	for _, shard := range shards {
+		if shard.ID != shardID || shard.Total != totalShards {
+			return nil, errors.New("mismatched shard set")
+		}
+		
+		// Verify checksum
+		if !verifyChecksum(shard.Data, shard.Checksum) {
+			return nil, fmt.Errorf("shard %d checksum verification failed", shard.Index)
+		}
+		
+		shardMap[shard.Index] = shard
+	}
+
+	// Check if we have all shards
+	if len(shardMap) != int(totalShards) {
+		return nil, fmt.Errorf("%w: have %d, need %d", ErrInsufficientShards, len(shardMap), totalShards)
+	}
+
+	// Decrypt shards in order
+	decryptedData := make([]byte, 0)
+	
+	for i := uint32(0); i < totalShards; i++ {
+		shard, exists := shardMap[i]
+		if !exists {
+			return nil, fmt.Errorf("missing shard %d", i)
+		}
+
+		decrypted, err := e.decryptShard(shard)
+		if err != nil {
+			clearBytes(decryptedData)
+			return nil, fmt.Errorf("failed to decrypt shard %d: %w", i, err)
+		}
+
+		decryptedData = append(decryptedData, decrypted...)
+		clearBytes(decrypted)
+	}
+
+	return decryptedData, nil
+}
+
+// decryptShard decrypts a single shard
+func (e *ShardEncryptor) decryptShard(shard *CharacterShard) ([]byte, error) {
+	// Derive key for this shard
+	shardKey, err := e.hkdfManager.DeriveKeyForShard(shard.ID + shard.Index)
+	if err != nil {
+		return nil, err
+	}
+	defer clearBytes(shardKey)
+
+	// Create cipher
+	aead, err := chacha20poly1305.NewX(shardKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	// Additional data for AEAD
+	additionalData := make([]byte, 12)
+	binary.BigEndian.PutUint32(additionalData[0:4], shard.ID)
+	binary.BigEndian.PutUint32(additionalData[4:8], shard.Index)
+	binary.BigEndian.PutUint32(additionalData[8:12], shard.Total)
+
+	// Get secure buffer for decryption
+	secureBuffer := e.secureMemory.Get()
+	defer e.secureMemory.Put(secureBuffer)
+
+	// Decrypt data
+	plaintext, err := aead.Open(nil, shard.Nonce, shard.Data, additionalData)
+	if err != nil {
+		return nil, ErrShardDecryptionFailed
+	}
+
+	return plaintext, nil
+}
+
+// ReencryptShards re-encrypts shards with a new key
+func (e *ShardEncryptor) ReencryptShards(shards []*CharacterShard, newMasterKey []byte) ([]*CharacterShard, error) {
+	// Decrypt with current key
+	data, err := e.DecryptShards(shards)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt shards: %w", err)
+	}
+	defer clearBytes(data)
+
+	// Update master key
+	if err := e.hkdfManager.UpdateMasterKey(newMasterKey); err != nil {
+		return nil, fmt.Errorf("failed to update master key: %w", err)
+	}
+
+	// Re-encrypt with new key
+	return e.EncryptData(data)
+}
+
+// Clear clears the encryptor's keys and secure memory
+func (e *ShardEncryptor) Clear() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.hkdfManager.Clear()
+	e.secureMemory.Clear()
+}
+
+// Helper functions
+
+func generateShardID() uint32 {
+	var id uint32
+	binary.Read(rand.Reader, binary.BigEndian, &id)
+	return id
+}
+
+func calculateChecksum(data []byte) []byte {
+	// Simple checksum for now - in production use HMAC
+	sum := make([]byte, 16)
+	for i := 0; i < len(data); i++ {
+		sum[i%16] ^= data[i]
+	}
+	return sum
+}
+
+func verifyChecksum(data, checksum []byte) bool {
+	calculated := calculateChecksum(data)
+	if len(calculated) != len(checksum) {
+		return false
+	}
+	for i := range calculated {
+		if calculated[i] != checksum[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// ShardStorage interface for storing encrypted shards
+type ShardStorage interface {
+	Store(shard *CharacterShard) error
+	Retrieve(shardID uint32, index uint32) (*CharacterShard, error)
+	RetrieveAll(shardID uint32) ([]*CharacterShard, error)
+	Delete(shardID uint32) error
+}
