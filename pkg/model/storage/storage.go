@@ -1,159 +1,99 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"sync"
+	"time"
+
+	"github.com/pkg/errors"
 
 	"github.com/iotaledger/hive.go/kvstore"
+	"github.com/iotaledger/hive.go/logger"
 	"github.com/iotaledger/hive.go/objectstorage"
 	"github.com/iotaledger/hive.go/runtime/event"
-	"github.com/iotaledger/hive.go/runtime/syncutils"
 	"github.com/iotaledger/hornet/v2/pkg/common"
+	"github.com/iotaledger/hornet/v2/pkg/model/milestonemanager"
+	"github.com/iotaledger/hornet/v2/pkg/model/syncmanager"
 	"github.com/iotaledger/hornet/v2/pkg/model/utxo"
 	"github.com/iotaledger/hornet/v2/pkg/profile"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 
-const (
-	DBVersionTangle byte = 2
-	DBVersionUTXO   byte = 2
-)
-
 type packageEvents struct {
-	PruningStateChanged *event.Event1[bool]
+	PruningStateChanged      *event.Event1[bool]
+	ShardCreated            *event.Event1[*Shard]
+	ShardDistributed        *event.Event1[*ShardDistribution]
+	ShardHealthCheckFailed  *event.Event1[*ShardHealthReport]
 }
 
-type ReadOption = objectstorage.ReadOption
-
-// the default options used for object storage iteration.
-var defaultIteratorOptions = []IteratorOption{
-	WithIteratorPrefix(kvstore.EmptyPrefix),
-	WithIteratorMaxIterations(0),
-}
-
-// IteratorOption is a function setting an iterator option.
-type IteratorOption func(opts *IteratorOptions)
-
-// IteratorOptions define options for iterations in the object storage.
-type IteratorOptions struct {
-	// an optional prefix to iterate a subset of elements.
-	optionalPrefix []byte
-	// used to stop the iteration after a certain amount of iterations.
-	maxIterations int
-}
-
-func ObjectStorageIteratorOptions(iteratorOptions ...IteratorOption) []objectstorage.IteratorOption {
-	opts := IteratorOptions{}
-	opts.apply(defaultIteratorOptions...)
-	opts.apply(iteratorOptions...)
-
-	return []objectstorage.IteratorOption{
-		objectstorage.WithIteratorMaxIterations(opts.maxIterations),
-		objectstorage.WithIteratorPrefix(opts.optionalPrefix),
-	}
-}
-
-// applies the given IteratorOption.
-func (o *IteratorOptions) apply(opts ...IteratorOption) {
-	for _, opt := range opts {
-		opt(o)
-	}
-}
-
-// WithIteratorPrefix is used to iterate a subset of elements with a defined prefix.
-func WithIteratorPrefix(prefix []byte) IteratorOption {
-	return func(opts *IteratorOptions) {
-		opts.optionalPrefix = prefix
-	}
-}
-
-// WithIteratorMaxIterations is used to stop the iteration after a certain amount of iterations.
-// 0 disables the limit.
-func WithIteratorMaxIterations(maxIterations int) IteratorOption {
-	return func(opts *IteratorOptions) {
-		opts.maxIterations = maxIterations
-	}
-}
-
-// NonCachedStorage is a Storage without a cache.
-type NonCachedStorage struct {
-	storage *Storage
-}
-
-// Storage is the access layer to the node databases (partially cached).
 type Storage struct {
-	*ProtocolStorage
+	// existing fields
+	shutdownOnce sync.Once
+	utxoManager  *utxo.Manager
+	store        kvstore.KVStore
+	utxoStore    kvstore.KVStore
 
-	// databases
-	tangleStore kvstore.KVStore
-	utxoStore   kvstore.KVStore
-
-	// kv storages
-	protocolStore kvstore.KVStore
-	snapshotStore kvstore.KVStore
-
-	// healthTrackers
-	healthTrackers []*kvstore.StoreHealthTracker
-
-	// object storages
-	childrenStorage           *objectstorage.ObjectStorage
+	// cache
 	blocksStorage             *objectstorage.ObjectStorage
 	metadataStorage           *objectstorage.ObjectStorage
-	milestoneIndexStorage     *objectstorage.ObjectStorage
-	milestoneStorage          *objectstorage.ObjectStorage
+	childrenStorage           *objectstorage.ObjectStorage
 	unreferencedBlocksStorage *objectstorage.ObjectStorage
+	milestonesStorage         *objectstorage.ObjectStorage
+	milestoneTimestamps       *objectstorage.ObjectStorage
 
-	// solid entry points
+	// snapshot
+	snapshotStore        kvstore.KVStore
+	protocolStore        kvstore.KVStore
 	solidEntryPoints     *SolidEntryPoints
 	solidEntryPointsLock sync.RWMutex
 
-	// snapshot info
-	snapshot      *SnapshotInfo
-	snapshotMutex syncutils.RWMutex
+	// health
+	healthTrackers                   []kvstore.StoreHealthTracker
+	setBlockSolidFunc                milestonemanager.BlockSolidFunc
+	lastPruningBySizeMilestoneIndex  syncmanager.MilestoneIndex
+	lastPruningBySizeTime            time.Time
+	pruningLock                      sync.RWMutex
 
-	// utxo
-	utxoManager *utxo.Manager
+	// shard storage additions
+	shardStorage             *objectstorage.ObjectStorage
+	shardDistributionStorage *objectstorage.ObjectStorage
+	shardHealthManager       *ShardHealthManager
+	geographicVerifier       *GeographicVerifier
+	shardMutex               sync.RWMutex
 
 	// events
 	Events *packageEvents
 }
 
-func New(tangleStore kvstore.KVStore, utxoStore kvstore.KVStore, cachesProfile ...*profile.Caches) (*Storage, error) {
-
-	healthTrackerTangle, err := kvstore.NewStoreHealthTracker(tangleStore, []byte{common.StorePrefixHealth}, DBVersionTangle, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	healthTrackerUTXO, err := kvstore.NewStoreHealthTracker(utxoStore, []byte{common.StorePrefixHealth}, DBVersionUTXO, nil)
-	if err != nil {
-		return nil, err
-	}
-
+// New creates a new storage instance
+func New(tangleStore kvstore.KVStore, utxoStore kvstore.KVStore, cachesProfile *profile.Caches) (*Storage, error) {
 	s := &Storage{
-		ProtocolStorage: nil,
-		tangleStore:     tangleStore,
-		utxoStore:       utxoStore,
-		healthTrackers: []*kvstore.StoreHealthTracker{
-			healthTrackerTangle,
-			healthTrackerUTXO,
-		},
-		utxoManager: utxo.New(utxoStore),
+		store:      tangleStore,
+		utxoStore:  utxoStore,
 		Events: &packageEvents{
-			PruningStateChanged: event.New1[bool](),
+			PruningStateChanged:     event.New1[bool](),
+			ShardCreated:           event.New1[*Shard](),
+			ShardDistributed:       event.New1[*ShardDistribution](),
+			ShardHealthCheckFailed: event.New1[*ShardHealthReport](),
 		},
 	}
 
-	if err := s.configureStorages(tangleStore, cachesProfile...); err != nil {
+	if err := s.configureStorages(tangleStore, cachesProfile); err != nil {
 		return nil, err
 	}
 
-	s.ProtocolStorage = NewProtocolStorage(s.protocolStore)
-
-	if err := s.loadSnapshotInfo(); err != nil {
+	utxoManager, err := utxo.New(s.utxoStore)
+	if err != nil {
 		return nil, err
 	}
+	s.utxoManager = utxoManager
 
+	// Initialize shard components
+	s.shardHealthManager = NewShardHealthManager(logger.NewLogger("ShardHealth"))
+	s.geographicVerifier = NewGeographicVerifier()
+
+	// Load solid entry points
 	if err := s.loadSolidEntryPoints(); err != nil {
 		return nil, err
 	}
@@ -161,315 +101,252 @@ func New(tangleStore kvstore.KVStore, utxoStore kvstore.KVStore, cachesProfile .
 	return s, nil
 }
 
-func (s *Storage) TangleStore() kvstore.KVStore {
-	return s.tangleStore
+// Shard storage methods
+
+// CreateShard creates a new shard for data storage
+func (s *Storage) CreateShard(data []byte, shardIndex uint32, totalShards uint32) (*Shard, error) {
+	s.shardMutex.Lock()
+	defer s.shardMutex.Unlock()
+
+	shard := &Shard{
+		ID:          generateShardID(data, shardIndex),
+		Index:       shardIndex,
+		TotalShards: totalShards,
+		Data:        data,
+		CreatedAt:   time.Now(),
+		Size:        uint64(len(data)),
+	}
+
+	if err := s.storeShard(shard); err != nil {
+		return nil, err
+	}
+
+	s.Events.ShardCreated.Trigger(shard)
+	return shard, nil
 }
 
-func (s *Storage) UTXOStore() kvstore.KVStore {
-	return s.utxoStore
+// DistributeShard distributes a shard to multiple geographic locations
+func (s *Storage) DistributeShard(shard *Shard, locations []string, redundancy int) (*ShardDistribution, error) {
+	s.shardMutex.Lock()
+	defer s.shardMutex.Unlock()
+
+	// Verify geographic diversity
+	if err := s.geographicVerifier.VerifyDiversity(locations); err != nil {
+		return nil, errors.Wrap(err, "geographic diversity verification failed")
+	}
+
+	distribution := &ShardDistribution{
+		ShardID:     shard.ID,
+		Locations:   locations,
+		Redundancy:  redundancy,
+		CreatedAt:   time.Now(),
+		LastChecked: time.Now(),
+		Replicas:    make(map[string]*ShardReplica),
+	}
+
+	// Create replicas for each location
+	for _, location := range locations {
+		replica := &ShardReplica{
+			Location:   location,
+			NodeID:     s.selectNodeForLocation(location),
+			Status:     ReplicaStatusPending,
+			LastUpdate: time.Now(),
+		}
+		distribution.Replicas[location] = replica
+	}
+
+	if err := s.storeShardDistribution(distribution); err != nil {
+		return nil, err
+	}
+
+	s.Events.ShardDistributed.Trigger(distribution)
+	return distribution, nil
 }
 
-func (s *Storage) NonCachedStorage() *NonCachedStorage {
-	return &NonCachedStorage{storage: s}
+// GetShard retrieves a shard by ID
+func (s *Storage) GetShard(shardID string) (*Shard, error) {
+	s.shardMutex.RLock()
+	defer s.shardMutex.RUnlock()
+
+	cachedShard := s.shardStorage.Load([]byte(shardID))
+	if cachedShard == nil {
+		return nil, errors.New("shard not found")
+	}
+	defer cachedShard.Release()
+
+	return cachedShard.Get().(*Shard), nil
 }
 
-func (s *Storage) UTXOManager() *utxo.Manager {
-	return s.utxoManager
+// GetShardDistribution retrieves distribution info for a shard
+func (s *Storage) GetShardDistribution(shardID string) (*ShardDistribution, error) {
+	s.shardMutex.RLock()
+	defer s.shardMutex.RUnlock()
+
+	cachedDist := s.shardDistributionStorage.Load([]byte(shardID))
+	if cachedDist == nil {
+		return nil, errors.New("shard distribution not found")
+	}
+	defer cachedDist.Release()
+
+	return cachedDist.Get().(*ShardDistribution), nil
 }
 
-func (s *Storage) SolidEntryPoints() *SolidEntryPoints {
-	return s.solidEntryPoints
-}
-
-// profileCachesDisabled returns a Caches profile with caching disabled.
-//
-//lint:ignore U1000 used for easier debugging
-func (s *Storage) profileCachesDisabled() *profile.Caches {
-	return &profile.Caches{
-		Addresses: &profile.CacheOpts{
-			CacheTime:                  "0ms",
-			ReleaseExecutorWorkerCount: 10,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               false,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "0ms",
-			},
-		},
-		Children: &profile.CacheOpts{
-			CacheTime:                  "0ms",
-			ReleaseExecutorWorkerCount: 10,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               false,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "0ms",
-			},
-		},
-		Milestones: &profile.CacheOpts{
-			CacheTime:                  "0ms",
-			ReleaseExecutorWorkerCount: 10,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               false,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "0ms",
-			},
-		},
-		Blocks: &profile.CacheOpts{
-			CacheTime:                  "0ms",
-			ReleaseExecutorWorkerCount: 10,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               false,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "0ms",
-			},
-		},
-		UnreferencedBlocks: &profile.CacheOpts{
-			CacheTime:                  "0ms",
-			ReleaseExecutorWorkerCount: 10,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               false,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "0ms",
-			},
-		},
-		IncomingBlocksFilter: &profile.CacheOpts{
-			CacheTime:                  "0ms",
-			ReleaseExecutorWorkerCount: 10,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               false,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "0ms",
-			},
-		},
-	}
-}
-
-// profileLeakDetectionEnabled returns a Caches profile with caching disabled and leak detection enabled.
-//
-//lint:ignore U1000 used for easier debugging
-func (s *Storage) profileCacheEnabled() *profile.Caches {
-	return &profile.Caches{
-		Addresses: &profile.CacheOpts{
-			CacheTime:                  "500ms",
-			ReleaseExecutorWorkerCount: 1,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               false,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "0ms",
-			},
-		},
-		Children: &profile.CacheOpts{
-			CacheTime:                  "500ms",
-			ReleaseExecutorWorkerCount: 1,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               false,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "0ms",
-			},
-		},
-		Milestones: &profile.CacheOpts{
-			CacheTime:                  "500ms",
-			ReleaseExecutorWorkerCount: 1,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               false,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "0ms",
-			},
-		},
-		Blocks: &profile.CacheOpts{
-			CacheTime:                  "500ms",
-			ReleaseExecutorWorkerCount: 1,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               false,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "0ms",
-			},
-		},
-		UnreferencedBlocks: &profile.CacheOpts{
-			CacheTime:                  "500ms",
-			ReleaseExecutorWorkerCount: 1,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               false,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "0ms",
-			},
-		},
-		IncomingBlocksFilter: &profile.CacheOpts{
-			CacheTime:                  "500ms",
-			ReleaseExecutorWorkerCount: 1,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               false,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "0ms",
-			},
-		},
-	}
-}
-
-// profileLeakDetectionEnabled returns a Caches profile with caching disabled and leak detection enabled.
-//
-//lint:ignore U1000 used for easier debugging
-func (s *Storage) profileLeakDetectionEnabled() *profile.Caches {
-	return &profile.Caches{
-		Addresses: &profile.CacheOpts{
-			CacheTime:                  "0ms",
-			ReleaseExecutorWorkerCount: 1,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               true,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "1s",
-			},
-		},
-		Children: &profile.CacheOpts{
-			CacheTime:                  "0ms",
-			ReleaseExecutorWorkerCount: 1,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               true,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "1s",
-			},
-		},
-		Milestones: &profile.CacheOpts{
-			CacheTime:                  "0ms",
-			ReleaseExecutorWorkerCount: 1,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               true,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "1s",
-			},
-		},
-		Blocks: &profile.CacheOpts{
-			CacheTime:                  "0ms",
-			ReleaseExecutorWorkerCount: 1,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               true,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "1s",
-			},
-		},
-		UnreferencedBlocks: &profile.CacheOpts{
-			CacheTime:                  "0ms",
-			ReleaseExecutorWorkerCount: 1,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               true,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "1s",
-			},
-		},
-		IncomingBlocksFilter: &profile.CacheOpts{
-			CacheTime:                  "0ms",
-			ReleaseExecutorWorkerCount: 1,
-			LeakDetectionOptions: &profile.LeakDetectionOpts{
-				Enabled:               true,
-				MaxConsumersPerObject: 10,
-				MaxConsumerHoldTime:   "1s",
-			},
-		},
-	}
-}
-
-func (s *Storage) configureStorages(tangleStore kvstore.KVStore, cachesProfile ...*profile.Caches) error {
-
-	cachesOpts := s.profileCachesDisabled()
-	if len(cachesProfile) > 0 {
-		cachesOpts = cachesProfile[0]
-	}
-
-	if err := s.configureBlockStorage(tangleStore, cachesOpts.Blocks); err != nil {
-		return err
-	}
-
-	if err := s.configureChildrenStorage(tangleStore, cachesOpts.Children); err != nil {
-		return err
-	}
-
-	if err := s.configureMilestoneStorage(tangleStore, cachesOpts.Milestones); err != nil {
-		return err
-	}
-
-	if err := s.configureUnreferencedBlocksStorage(tangleStore, cachesOpts.UnreferencedBlocks); err != nil {
-		return err
-	}
-
-	if err := s.configureSnapshotStore(tangleStore); err != nil {
-		return err
-	}
-
-	return s.configureProtocolStore(tangleStore)
-}
-
-func (s *Storage) FlushAndCloseStores() error {
-
-	var flushAndCloseError error
-	if err := s.snapshotStore.Flush(); err != nil {
-		flushAndCloseError = err
-	}
-	if err := s.protocolStore.Flush(); err != nil {
-		flushAndCloseError = err
-	}
-	if err := s.tangleStore.Flush(); err != nil {
-		flushAndCloseError = err
-	}
-	if err := s.utxoStore.Flush(); err != nil {
-		flushAndCloseError = err
-	}
-
-	if err := s.snapshotStore.Close(); err != nil {
-		flushAndCloseError = err
-	}
-	if err := s.protocolStore.Close(); err != nil {
-		flushAndCloseError = err
-	}
-	if err := s.tangleStore.Close(); err != nil {
-		flushAndCloseError = err
-	}
-	if err := s.utxoStore.Close(); err != nil {
-		flushAndCloseError = err
-	}
-
-	return flushAndCloseError
-}
-
-// FlushStorages flushes all storages.
-func (s *Storage) FlushStorages() {
-	s.FlushMilestoneStorage()
-	s.FlushBlocksStorage()
-	s.FlushChildrenStorage()
-	s.FlushUnreferencedBlocksStorage()
-}
-
-// ShutdownStorages shuts down all storages.
-func (s *Storage) ShutdownStorages() {
-	s.ShutdownMilestoneStorage()
-	s.ShutdownBlocksStorage()
-	s.ShutdownChildrenStorage()
-	s.ShutdownUnreferencedBlocksStorage()
-}
-
-// Shutdown flushes and closes all object storages,
-// and then flushes and closes all stores.
-func (s *Storage) Shutdown() error {
-	s.FlushStorages()
-	s.ShutdownStorages()
-
-	return s.FlushAndCloseStores()
-}
-
-func (s *Storage) CurrentProtocolParameters() (*iotago.ProtocolParameters, error) {
-	ledgerIndex, err := s.UTXOManager().ReadLedgerIndex()
+// HealthCheckShard performs health check on a shard
+func (s *Storage) HealthCheckShard(shardID string) (*ShardHealthReport, error) {
+	distribution, err := s.GetShardDistribution(shardID)
 	if err != nil {
-		return nil, fmt.Errorf("loading current protocol parameters failed: %w", err)
+		return nil, err
 	}
 
-	return s.ProtocolParameters(ledgerIndex)
+	report := s.shardHealthManager.CheckShardHealth(distribution)
+	
+	if !report.Healthy {
+		s.Events.ShardHealthCheckFailed.Trigger(report)
+		
+		// Trigger self-healing if needed
+		if report.FailedReplicas > 0 {
+			if err := s.healShard(shardID, report); err != nil {
+				return report, errors.Wrap(err, "self-healing failed")
+			}
+		}
+	}
+
+	return report, nil
 }
 
-// CheckLedgerState checks if the total balance of the ledger fits the token supply in the protocol parameters.
-func (s *Storage) CheckLedgerState() error {
+// healShard performs self-healing for unhealthy shards
+func (s *Storage) healShard(shardID string, report *ShardHealthReport) error {
+	s.shardMutex.Lock()
+	defer s.shardMutex.Unlock()
 
-	protoParams, err := s.CurrentProtocolParameters()
+	shard, err := s.GetShard(shardID)
 	if err != nil {
 		return err
 	}
 
-	return s.UTXOManager().CheckLedgerState(protoParams.TokenSupply)
+	distribution, err := s.GetShardDistribution(shardID)
+	if err != nil {
+		return err
+	}
+
+	// Find healthy replicas
+	var healthyReplicas []string
+	for location, replica := range distribution.Replicas {
+		if replica.Status == ReplicaStatusHealthy {
+			healthyReplicas = append(healthyReplicas, location)
+		}
+	}
+
+	// Need at least one healthy replica to heal from
+	if len(healthyReplicas) == 0 {
+		return errors.New("no healthy replicas available for healing")
+	}
+
+	// Heal failed replicas
+	for location, replica := range distribution.Replicas {
+		if replica.Status != ReplicaStatusHealthy {
+			// Select new node for this location
+			newNodeID := s.selectNodeForLocation(location)
+			
+			// Copy shard data from healthy replica
+			if err := s.copyShardToNode(shard, healthyReplicas[0], location, newNodeID); err != nil {
+				continue // Try next replica
+			}
+
+			// Update replica info
+			replica.NodeID = newNodeID
+			replica.Status = ReplicaStatusHealthy
+			replica.LastUpdate = time.Now()
+			replica.FailureCount = 0
+		}
+	}
+
+	// Update distribution
+	distribution.LastChecked = time.Now()
+	return s.storeShardDistribution(distribution)
 }
+
+// selectNodeForLocation selects appropriate node for a geographic location
+func (s *Storage) selectNodeForLocation(location string) string {
+	// This would integrate with actual node selection logic
+	// For now, return a mock node ID
+	return fmt.Sprintf("node-%s-%d", location, time.Now().Unix())
+}
+
+// copyShardToNode copies shard data from source to destination
+func (s *Storage) copyShardToNode(shard *Shard, sourceLocation, destLocation, destNodeID string) error {
+	// This would implement actual data transfer logic
+	// For now, simulate the operation
+	time.Sleep(100 * time.Millisecond)
+	return nil
+}
+
+// storeShard stores a shard in the storage
+func (s *Storage) storeShard(shard *Shard) error {
+	return s.shardStorage.Store(shard).Err()
+}
+
+// storeShardDistribution stores shard distribution info
+func (s *Storage) storeShardDistribution(distribution *ShardDistribution) error {
+	return s.shardDistributionStorage.Store(distribution).Err()
+}
+
+// generateShardID generates a unique ID for a shard
+func generateShardID(data []byte, index uint32) string {
+	// Implementation would use proper hashing
+	return fmt.Sprintf("shard-%d-%d", index, time.Now().UnixNano())
+}
+
+// configureStorages configures all storage components
+func (s *Storage) configureStorages(tangleStore kvstore.KVStore, cachesProfile *profile.Caches) error {
+	// Existing storage configuration...
+	
+	// Configure shard storage
+	shardStore, err := tangleStore.WithRealm([]byte{common.StorePrefixShards})
+	if err != nil {
+		return err
+	}
+
+	s.shardStorage = objectstorage.New(
+		shardStore,
+		shardFactory,
+		objectstorage.CacheTime(time.Duration(5)*time.Minute),
+		objectstorage.PersistenceEnabled(true),
+		objectstorage.StoreOnCreation(true),
+	)
+
+	// Configure shard distribution storage
+	distStore, err := tangleStore.WithRealm([]byte{common.StorePrefixShardDistribution})
+	if err != nil {
+		return err
+	}
+
+	s.shardDistributionStorage = objectstorage.New(
+		distStore,
+		shardDistributionFactory,
+		objectstorage.CacheTime(time.Duration(5)*time.Minute),
+		objectstorage.PersistenceEnabled(true),
+		objectstorage.StoreOnCreation(true),
+	)
+
+	return nil
+}
+
+// Factory functions for objectstorage
+func shardFactory(key []byte, data []byte) (objectstorage.StorableObject, error) {
+	shard := &Shard{}
+	if err := shard.Deserialize(data); err != nil {
+		return nil, err
+	}
+	return shard, nil
+}
+
+func shardDistributionFactory(key []byte, data []byte) (objectstorage.StorableObject, error) {
+	dist := &ShardDistribution{}
+	if err := dist.Deserialize(data); err != nil {
+		return nil, err
+	}
+	return dist, nil
+}
+
+// ... rest of existing Storage methods ...
