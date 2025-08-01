@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package lockbox.api;
+
+option go_package = "github.com/iotaledger/lockbox/v2/lockbox/b2b/api";
+
+service LockBoxAPI {
+  // Script management
+  rpc CompileScript(CompileScriptRequest) returns (CompileScriptResponse);
+  rpc ExecuteScript(ExecuteScriptRequest) returns (ExecuteScriptResponse);
+  
+  // Vault management
+  rpc CreateVault(CreateVaultRequest) returns (CreateVaultResponse);
+  rpc GenerateKey(GenerateKeyRequest) returns (GenerateKeyResponse);
+  
+  // Account management
+  rpc GetAccountInfo(GetAccountInfoRequest) returns (AccountInfo);
+  rpc UpgradeTier(UpgradeTierRequest) returns (UpgradeTierResponse);
+}
+
+message CompileScriptRequest {
+  string source = 1;
+}
+
+message CompileScriptResponse {
+  string script_id = 1;
+  bytes bytecode = 2;
+}
+
+message ExecuteScriptRequest {
+  string script_id = 1;
+  map<string, string> parameters = 2;
+}
+
+message ExecuteScriptResponse {
+  bool success = 1;
+  string result = 2;
+  string error = 3;
+}
+
+message CreateVaultRequest {
+  string owner = 1;
+}
+
+message CreateVaultResponse {
+  string vault_id = 1;
+}
+
+message GenerateKeyRequest {
+  string vault_id = 1;
+  string key_type = 2;
+}
+
+message GenerateKeyResponse {
+  string key_id = 1;
+  string public_key = 2;
+}
+
+message GetAccountInfoRequest {
+  string account_id = 1;
+}
+
+message AccountInfo {
+  string account_id = 1;
+  string tier = 2;
+  int64 created_at = 3;
+  Usage usage = 4;
+  repeated string features = 5;
+}
+
+message Usage {
+  int32 transactions_hour = 1;
+  int64 storage_used = 2;
+  int32 contracts_deployed = 3;
+}
+
+message UpgradeTierRequest {
+  string account_id = 1;
+  string new_tier = 2;
+}
+
+message UpgradeTierResponse {
+  bool success = 1;
+  string message = 2;
+}

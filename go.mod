@@ -1,6 +1,6 @@
-module github.com/iotaledger/hornet/v2
+module github.com/iotaledger/lockbox/v2
 
-go 1.21
+go 1.22
 
 require (
 	github.com/blang/vfs v1.0.0
@@ -43,9 +43,6 @@ require (
 	golang.org/x/crypto v0.12.0
 	golang.org/x/term v0.11.0
 	google.golang.org/grpc v1.57.0
-	golang.org/x/crypto v0.21.0
-	github.com/consensys/gnark v0.9.1
-	github.com/consensys/gnark-crypto v0.12.1
 )
 
 require (

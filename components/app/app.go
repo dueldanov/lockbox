@@ -7,43 +7,40 @@ import (
 	"github.com/iotaledger/hive.go/app"
 	"github.com/iotaledger/hive.go/app/components/profiling"
 	"github.com/iotaledger/hive.go/app/components/shutdown"
-	"github.com/iotaledger/hornet/v2/components/autopeering"
-	"github.com/iotaledger/hornet/v2/components/coreapi"
-	dashboard_metrics "github.com/iotaledger/hornet/v2/components/dashboard-metrics"
-	"github.com/iotaledger/hornet/v2/components/database"
-	"github.com/iotaledger/hornet/v2/components/debug"
-	"github.com/iotaledger/hornet/v2/components/gossip"
-	"github.com/iotaledger/hornet/v2/components/inx"
-	"github.com/iotaledger/hornet/v2/components/p2p"
-	"github.com/iotaledger/hornet/v2/components/pow"
-	"github.com/iotaledger/hornet/v2/components/profile"
-	"github.com/iotaledger/hornet/v2/components/prometheus"
-	"github.com/iotaledger/hornet/v2/components/protocfg"
-	"github.com/iotaledger/hornet/v2/components/pruning"
-	"github.com/iotaledger/hornet/v2/components/receipt"
-	"github.com/iotaledger/hornet/v2/components/restapi"
-	"github.com/iotaledger/hornet/v2/components/snapshot"
-	"github.com/iotaledger/hornet/v2/components/tangle"
-	"github.com/iotaledger/hornet/v2/components/urts"
-	"github.com/iotaledger/hornet/v2/components/warpsync"
-	"github.com/iotaledger/hornet/v2/pkg/toolset"
+	"github.com/iotaledger/lockbox/v2/components/autopeering"
+	"github.com/iotaledger/lockbox/v2/components/coreapi"
+	dashboard_metrics "github.com/iotaledger/lockbox/v2/components/dashboard-metrics"
+	"github.com/iotaledger/lockbox/v2/components/database"
+	"github.com/iotaledger/lockbox/v2/components/debug"
+	"github.com/iotaledger/lockbox/v2/components/gossip"
+	"github.com/iotaledger/lockbox/v2/components/inx"
+	"github.com/iotaledger/lockbox/v2/components/lockbox"
+	"github.com/iotaledger/lockbox/v2/components/p2p"
+	"github.com/iotaledger/lockbox/v2/components/profile"
+	"github.com/iotaledger/lockbox/v2/components/prometheus"
+	"github.com/iotaledger/lockbox/v2/components/protocfg"
+	"github.com/iotaledger/lockbox/v2/components/pruning"
+	"github.com/iotaledger/lockbox/v2/components/receipt"
+	"github.com/iotaledger/lockbox/v2/components/restapi"
+	"github.com/iotaledger/lockbox/v2/components/snapshot"
+	"github.com/iotaledger/lockbox/v2/components/tangle"
+	"github.com/iotaledger/lockbox/v2/components/urts"
+	"github.com/iotaledger/lockbox/v2/components/warpsync"
+	"github.com/iotaledger/lockbox/v2/pkg/toolset"
 )
 
 var (
-	// Name of the app.
-	Name = "HORNET"
-
-	// Version of the app.
+	Name    = "LockSmith"
 	Version = "2.0.2"
 )
 
 func App() *app.App {
 	return app.New(Name, Version,
-		app.WithVersionCheck("iotaledger", "hornet"),
+		app.WithVersionCheck("iotaledger", "lockbox"),
 		app.WithUsageText(fmt.Sprintf(`Usage of %s (%s %s):
 
 Run '%s tools' to list all available tools.
-		
+
 Command line flags:
 `, os.Args[0], Name, Version, os.Args[0])),
 		app.WithInitComponent(InitComponent),
@@ -52,7 +49,6 @@ Command line flags:
 			protocfg.Component,
 			shutdown.Component,
 			database.Component,
-			pow.Component,
 			p2p.Component,
 			gossip.Component,
 			tangle.Component,
@@ -69,13 +65,12 @@ Command line flags:
 			inx.Component,
 			dashboard_metrics.Component,
 			debug.Component,
+			lockbox.Component,
 		),
 	)
 }
 
-var (
-	InitComponent *app.InitComponent
-)
+var InitComponent *app.InitComponent
 
 func init() {
 	InitComponent = &app.InitComponent{
@@ -103,10 +98,8 @@ func init() {
 }
 
 func initialize(_ *app.App) error {
-
 	if toolset.ShouldHandleTools() {
 		toolset.HandleTools()
-		// HandleTools will call os.Exit
 	}
 
 	return nil
