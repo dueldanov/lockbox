@@ -15,13 +15,16 @@ import (
 	"github.com/iotaledger/hornet/v2/pkg/model/utxo"
 	"github.com/iotaledger/hornet/v2/pkg/protocol"
 	"github.com/iotaledger/hornet/v2/pkg/tangle"
+	iotago "github.com/iotaledger/iota.go/v3"
 )
 
 func init() {
 	Component = &app.Component{
-		Name:     "LockBox",
-		DepsFunc: func(cDeps dependencies) { deps = cDeps },
-		Params:   params,
+		Name: "LockBox",
+		DepsFunc: func(cDeps dependencies) {
+			deps = cDeps
+		},
+		Params:    params,
 		IsEnabled: func(c *dig.Container) bool {
 			return components.IsAutopeeringEntryNodeDisabled(c) && ParamsLockBox.Enabled
 		},
@@ -44,7 +47,6 @@ type dependencies struct {
 	UTXOManager     *utxo.Manager
 	SyncManager     *syncmanager.SyncManager
 	ProtocolManager *protocol.Manager
-	
 	LockBoxService  *lockbox.Service
 	GRPCServer      *lockbox.GRPCServer
 }
@@ -52,42 +54,46 @@ type dependencies struct {
 func provide(c *dig.Container) error {
 	type serviceDeps struct {
 		dig.In
-		
 		Storage         *storage.Storage
 		UTXOManager     *utxo.Manager
 		SyncManager     *syncmanager.SyncManager
 		ProtocolManager *protocol.Manager
 	}
 
-	// Provide LockBox service
 	if err := c.Provide(func(deps serviceDeps) (*lockbox.Service, error) {
 		cfg := &lockbox.ServiceConfig{
-			Tier:                    lockbox.Tier(ParamsLockBox.Tier),
-			MinLockPeriod:          ParamsLockBox.MinLockPeriod,
-			MaxLockPeriod:          ParamsLockBox.MaxLockPeriod,
-			MinHoldingsUSD:         ParamsLockBox.MinHoldingsUSD,
-			GeographicRedundancy:   ParamsLockBox.GeographicRedundancy,
-			NodeLocations:          ParamsLockBox.NodeLocations,
-			MaxScriptSize:          ParamsLockBox.MaxScriptSize,
-			MaxExecutionTime:       ParamsLockBox.MaxExecutionTime,
-			EnableEmergencyUnlock:  ParamsLockBox.EnableEmergencyUnlock,
-			EmergencyDelayDays:     ParamsLockBox.EmergencyDelayDays,
-			MultiSigRequired:       ParamsLockBox.MultiSigRequired,
-			MinMultiSigSigners:     ParamsLockBox.MinMultiSigSigners,
+			Tier:                  lockbox.Tier(ParamsLockBox.Tier),
+			MinLockPeriod:         ParamsLockBox.MinLockPeriod,
+			MaxLockPeriod:         ParamsLockBox.MaxLockPeriod,
+			MinHoldingsUSD:        ParamsLockBox.MinHoldingsUSD,
+			GeographicRedundancy:  ParamsLockBox.GeographicRedundancy,
+			NodeLocations:         ParamsLockBox.NodeLocations,
+			MaxScriptSize:         ParamsLockBox.MaxScriptSize,
+			MaxExecutionTime:      ParamsLockBox.MaxExecutionTime,
+			EnableEmergencyUnlock: ParamsLockBox.EnableEmergencyUnlock,
+			EmergencyDelayDays:    ParamsLockBox.EmergencyDelayDays,
+			MultiSigRequired:      ParamsLockBox.MultiSigRequired,
+			MinMultiSigSigners:    ParamsLockBox.MinMultiSigSigners,
 		}
-		
-		return lockbox.NewService(
+
+		// Initialize service with proper logger
+		service, err := lockbox.NewService(
+			Component.Logger(),
 			deps.Storage,
 			deps.UTXOManager,
 			deps.SyncManager,
 			deps.ProtocolManager,
 			cfg,
 		)
+		if err != nil {
+			return nil, err
+		}
+
+		return service, nil
 	}); err != nil {
 		Component.LogPanic(err)
 	}
 
-	// Provide gRPC server
 	if err := c.Provide(func(service *lockbox.Service) (*lockbox.GRPCServer, error) {
 		return lockbox.NewGRPCServer(
 			service,
@@ -104,14 +110,19 @@ func provide(c *dig.Container) error {
 }
 
 func configure() error {
-	// Initialize LockScript compiler
-	if err := deps.LockBoxService.InitializeCompiler(); err != nil {
-		Component.LogPanicf("failed to initialize LockScript compiler: %s", err)
+	// Initialize verification system
+	if err := deps.LockBoxService.InitializeVerification(); err != nil {
+		return err
 	}
 
-	// Set up event handlers
+	// Initialize LockScript compiler
+	if err := deps.LockBoxService.InitializeCompiler(); err != nil {
+		return err
+	}
+
+	// Hook into milestone events
 	deps.Tangle.Events.ConfirmedMilestoneIndexChanged.Hook(func(msIndex iotago.MilestoneIndex) {
-		if err := deps.LockBoxService.ProcessMilestone(msIndex); err != nil {
+		if err := deps.LockBoxService.ProcessMilestone(context.Background(), msIndex); err != nil {
 			Component.LogWarnf("error processing milestone %d: %s", msIndex, err)
 		}
 	})
@@ -123,24 +134,22 @@ func run() error {
 	// Start gRPC server
 	if err := Component.Daemon().BackgroundWorker("LockBox gRPC", func(ctx context.Context) {
 		Component.LogInfo("Starting LockBox gRPC server...")
-		
 		if err := deps.GRPCServer.Start(); err != nil {
 			Component.LogPanicf("failed to start gRPC server: %s", err)
 		}
 
 		<-ctx.Done()
-		
+
 		Component.LogInfo("Stopping LockBox gRPC server...")
 		deps.GRPCServer.Stop()
 		Component.LogInfo("Stopping LockBox gRPC server... done")
 	}, daemon.PriorityLockBox); err != nil {
-		Component.LogPanicf("failed to start worker: %s", err)
+		return err
 	}
 
-	// Start LockBox processor
+	// Start unlock processor
 	if err := Component.Daemon().BackgroundWorker("LockBox Processor", func(ctx context.Context) {
 		Component.LogInfo("Starting LockBox processor...")
-		
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 
@@ -150,13 +159,41 @@ func run() error {
 				Component.LogInfo("Stopping LockBox processor...")
 				return
 			case <-ticker.C:
-				if err := deps.LockBoxService.ProcessPendingUnlocks(); err != nil {
+				if err := deps.LockBoxService.ProcessPendingUnlocks(ctx); err != nil {
 					Component.LogWarnf("error processing pending unlocks: %s", err)
 				}
 			}
 		}
 	}, daemon.PriorityLockBox); err != nil {
-		Component.LogPanicf("failed to start worker: %s", err)
+		return err
+	}
+
+	// Start verification health monitor
+	if err := Component.Daemon().BackgroundWorker("LockBox Verification Monitor", func(ctx context.Context) {
+		Component.LogInfo("Starting verification health monitor...")
+		deps.LockBoxService.MonitorVerificationHealth(ctx)
+		Component.LogInfo("Stopped verification health monitor")
+	}, daemon.PriorityLockBox); err != nil {
+		return err
+	}
+
+	// Start performance optimizer
+	if err := Component.Daemon().BackgroundWorker("LockBox Performance Optimizer", func(ctx context.Context) {
+		Component.LogInfo("Starting performance optimizer...")
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				Component.LogInfo("Stopping performance optimizer...")
+				return
+			case <-ticker.C:
+				deps.LockBoxService.OptimizeNodeSelection()
+			}
+		}
+	}, daemon.PriorityLockBox); err != nil {
+		return err
 	}
 
 	return nil

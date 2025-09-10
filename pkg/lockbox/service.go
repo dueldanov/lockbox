@@ -2,13 +2,18 @@ package lockbox
 
 import (
 	"context"
-	"crypto/sha256"
+	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/iotaledger/hive.go/kvstore"
+	"github.com/iotaledger/hive.go/logger"
+	"github.com/iotaledger/hive.go/runtime/event"
+	"github.com/iotaledger/hornet/v2/pkg/lockbox/lockscript"
+	"github.com/iotaledger/hornet/v2/pkg/lockbox/vault"
+	"github.com/iotaledger/hornet/v2/pkg/lockbox/verification"
 	"github.com/iotaledger/hornet/v2/pkg/model/storage"
 	"github.com/iotaledger/hornet/v2/pkg/model/syncmanager"
 	"github.com/iotaledger/hornet/v2/pkg/model/utxo"
@@ -16,344 +21,466 @@ import (
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 
-// Tier represents the LockBox service tier
-type Tier int
-
-const (
-	TierBasic Tier = iota
-	TierStandard
-	TierPremium
-	TierElite
-)
-
-// ServiceConfig holds the configuration for the LockBox service
-type ServiceConfig struct {
-	Tier                 Tier
-	MinLockPeriod       time.Duration
-	MaxLockPeriod       time.Duration
-	MinHoldingsUSD      float64
-	GeographicRedundancy int
-	NodeLocations       []string
-	MaxScriptSize       int
-	MaxExecutionTime    time.Duration
-	EnableEmergencyUnlock bool
-	EmergencyDelayDays   int
-	MultiSigRequired    bool
-	MinMultiSigSigners  int
+type Events struct {
+	AssetLocked   *event.Event1[*LockedAsset]
+	AssetUnlocked *event.Event1[*LockedAsset]
+	ScriptCompiled *event.Event1[string]
+	VaultCreated  *event.Event1[string]
 }
 
-// Service implements the LockBox service
 type Service struct {
+	*logger.WrappedLogger
 	storage         *storage.Storage
 	utxoManager     *utxo.Manager
 	syncManager     *syncmanager.SyncManager
 	protocolManager *protocol.Manager
 	config          *ServiceConfig
-
-	compiler *LockScriptCompiler
-
-	mu               sync.RWMutex
-	lockedAssets     map[string]*LockedAsset
-	pendingUnlocks   map[string]*PendingUnlock
-	emergencyUnlocks map[string]*EmergencyUnlock
+	
+	storageManager   *StorageManager
+	scriptEngine     *lockscript.Engine
+	vaultManager     *vault.Manager
+	
+	// Verification components
+	verifier      *verification.Verifier
+	nodeSelector  *verification.NodeSelector
+	tokenManager  *verification.TokenManager
+	retryManager  *verification.RetryManager
+	
+	// State tracking
+	pendingUnlocks sync.Map
+	processedTxs   sync.Map
+	
+	Events *Events
+	
+	shutdownOnce sync.Once
+	isShutdown   bool
+	shutdownChan chan struct{}
 }
 
-// LockedAsset represents an asset locked in the LockBox
-type LockedAsset struct {
-	ID               string
-	OutputID         iotago.OutputID
-	Amount           uint64
-	LockTime         time.Time
-	UnlockTime       time.Time
-	Owner            iotago.Address
-	LockScript       *CompiledScript
-	MultiSigRequired bool
-	Signers          []iotago.Address
-	Metadata         map[string]string
-}
-
-// PendingUnlock represents a pending unlock request
-type PendingUnlock struct {
-	AssetID      string
-	RequestTime  time.Time
-	UnlockScript []byte
-	Signatures   [][]byte
-	Status       string
-}
-
-// EmergencyUnlock represents an emergency unlock request
-type EmergencyUnlock struct {
-	AssetID     string
-	RequestTime time.Time
-	UnlockTime  time.Time
-	Reason      string
-	Approved    bool
-}
-
-// NewService creates a new LockBox service
-func NewService(storage *storage.Storage, utxoManager *utxo.Manager, syncManager *syncmanager.SyncManager, protocolManager *protocol.Manager, config *ServiceConfig) (*Service, error) {
-	s := &Service{
-		storage:          storage,
-		utxoManager:      utxoManager,
-		syncManager:      syncManager,
-		protocolManager:  protocolManager,
-		config:           config,
-		lockedAssets:     make(map[string]*LockedAsset),
-		pendingUnlocks:   make(map[string]*PendingUnlock),
-		emergencyUnlocks: make(map[string]*EmergencyUnlock),
-	}
-
-	// Initialize the LockScript compiler
-	compiler, err := NewLockScriptCompiler(config.MaxScriptSize, config.MaxExecutionTime)
+func NewService(
+	log *logger.Logger,
+	storage *storage.Storage,
+	utxoManager *utxo.Manager,
+	syncManager *syncmanager.SyncManager,
+	protocolManager *protocol.Manager,
+	config *ServiceConfig,
+) (*Service, error) {
+	// Initialize storage manager
+	lockboxStore, err := storage.Store.WithRealm([]byte{0xFF})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create lockbox store: %w", err)
 	}
-	s.compiler = compiler
-
-	// Load existing locked assets from storage
-	if err := s.loadLockedAssets(); err != nil {
-		return nil, err
+	
+	storageManager, err := NewStorageManager(lockboxStore)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create storage manager: %w", err)
 	}
-
+	
+	// Initialize script engine with proper limits
+	scriptEngine := lockscript.NewEngine(
+		log,
+		config.MaxScriptSize,
+		config.MaxExecutionTime,
+	)
+	
+	// Initialize vault manager
+	vaultManager := vault.NewManager(
+		log,
+		24*time.Hour, // rotation interval
+		true,         // backup enabled
+	)
+	
+	s := &Service{
+		WrappedLogger:   logger.NewWrappedLogger(log),
+		storage:         storage,
+		utxoManager:     utxoManager,
+		syncManager:     syncManager,
+		protocolManager: protocolManager,
+		config:          config,
+		storageManager:  storageManager,
+		scriptEngine:    scriptEngine,
+		vaultManager:    vaultManager,
+		Events: &Events{
+			AssetLocked:    event.New1[*LockedAsset](),
+			AssetUnlocked:  event.New1[*LockedAsset](),
+			ScriptCompiled: event.New1[string](),
+			VaultCreated:   event.New1[string](),
+		},
+		shutdownChan: make(chan struct{}),
+	}
+	
+	// Load existing scripts into cache
+	if err := s.loadScripts(); err != nil {
+		return nil, fmt.Errorf("failed to load scripts: %w", err)
+	}
+	
+	// Load pending unlocks
+	if err := s.loadPendingUnlocks(); err != nil {
+		return nil, fmt.Errorf("failed to load pending unlocks: %w", err)
+	}
+	
 	return s, nil
 }
 
-// InitializeCompiler initializes the LockScript compiler
-func (s *Service) InitializeCompiler() error {
-	return s.compiler.Initialize()
+func (s *Service) InitializeVerification() error {
+	// Initialize node selector
+	s.nodeSelector = verification.NewNodeSelector(s.WrappedLogger.Logger)
+	for _, location := range s.config.NodeLocations {
+		node := &verification.VerificationNode{
+			ID:         fmt.Sprintf("node-%s-%d", location, time.Now().Unix()),
+			Region:     location,
+			Capacity:   100,
+			Latency:    50 * time.Millisecond,
+			Reputation: 0.95,
+			Available:  true,
+		}
+		if err := s.nodeSelector.RegisterNode(node); err != nil {
+			return fmt.Errorf("failed to register verification node: %w", err)
+		}
+	}
+	
+	// Initialize token manager
+	rotationPeriod := 24 * time.Hour
+	if s.config.Tier == TierElite {
+		rotationPeriod = 1 * time.Hour
+	}
+	s.tokenManager = verification.NewTokenManager(s.WrappedLogger.Logger, rotationPeriod, 7*24*time.Hour)
+	go s.tokenManager.Start(context.Background())
+	
+	// Initialize retry manager
+	retryConfig := verification.DefaultRetryConfig()
+	if s.config.Tier == TierElite {
+		retryConfig.MaxAttempts = 10
+		retryConfig.InitialBackoff = 50 * time.Millisecond
+	}
+	s.retryManager = verification.NewRetryManager(s.WrappedLogger.Logger, retryConfig)
+	
+	// Initialize verifier
+	s.verifier = verification.NewVerifier(
+		s.WrappedLogger.Logger,
+		s.nodeSelector,
+		s.tokenManager,
+		s.storageManager,
+	)
+	
+	s.LogInfo("Verification system initialized successfully")
+	return nil
 }
 
-// LockAsset locks an asset with the specified conditions
+func (s *Service) InitializeCompiler() error {
+	// Register built-in functions
+	s.scriptEngine.RegisterBuiltinFunctions()
+	
+	s.LogInfo("LockScript compiler initialized successfully")
+	return nil
+}
+
 func (s *Service) LockAsset(ctx context.Context, req *LockAssetRequest) (*LockAssetResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Validate tier permissions
-	if err := s.validateTierPermissions(req); err != nil {
+	// Validate request
+	if err := s.validateLockRequest(req); err != nil {
 		return nil, err
 	}
-
-	// Compile and validate lock script
-	compiled, err := s.compiler.Compile(req.LockScript)
+	
+	// Check if output exists and is unspent
+	output, err := s.utxoManager.ReadOutputByOutputID(req.OutputID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to compile lock script: %w", err)
+		return nil, fmt.Errorf("failed to read output: %w", err)
 	}
-
+	
+	// Verify ownership
+	if !s.verifyOwnership(output, req.OwnerAddress) {
+		return nil, fmt.Errorf("address does not own the output")
+	}
+	
+	// Compile lock script if provided
+	var compiledScript *lockscript.CompiledScript
+	if req.LockScript != "" {
+		compiledScript, err = s.scriptEngine.CompileScript(ctx, req.LockScript)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compile lock script: %w", err)
+		}
+	}
+	
 	// Generate asset ID
-	assetID := s.generateAssetID(req.OutputID, req.LockTime)
-
+	assetID := s.generateAssetID()
+	
 	// Create locked asset
+	now := time.Now()
 	asset := &LockedAsset{
-		ID:               assetID,
-		OutputID:         req.OutputID,
-		Amount:           req.Amount,
-		LockTime:         req.LockTime,
-		UnlockTime:       req.UnlockTime,
-		Owner:            req.Owner,
-		LockScript:       compiled,
-		MultiSigRequired: req.MultiSigRequired,
-		Signers:          req.Signers,
-		Metadata:         req.Metadata,
+		ID:                assetID,
+		OwnerAddress:      req.OwnerAddress,
+		OutputID:          req.OutputID,
+		Amount:            output.Deposit(),
+		LockTime:          now,
+		UnlockTime:        now.Add(req.LockDuration),
+		LockScript:        req.LockScript,
+		MultiSigAddresses: req.MultiSigAddresses,
+		MinSignatures:     req.MinSignatures,
+		Status:            AssetStatusLocked,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		EmergencyUnlock:   s.config.EnableEmergencyUnlock,
 	}
-
-	// Store locked asset
-	if err := s.storeLockedAsset(asset); err != nil {
-		return nil, err
+	
+	// Store the asset
+	if err := s.storageManager.StoreLockedAsset(asset); err != nil {
+		return nil, fmt.Errorf("failed to store locked asset: %w", err)
 	}
-
-	s.lockedAssets[assetID] = asset
-
+	
+	// Emit event
+	s.Events.AssetLocked.Trigger(asset)
+	
 	return &LockAssetResponse{
 		AssetID:    assetID,
 		LockTime:   asset.LockTime,
 		UnlockTime: asset.UnlockTime,
-		Status:     "locked",
+		Status:     string(asset.Status),
 	}, nil
 }
 
-// UnlockAsset unlocks an asset if conditions are met
 func (s *Service) UnlockAsset(ctx context.Context, req *UnlockAssetRequest) (*UnlockAssetResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	asset, exists := s.lockedAssets[req.AssetID]
-	if !exists {
-		return nil, errors.New("asset not found")
-	}
-
-	// Check if unlock time has passed
-	if time.Now().Before(asset.UnlockTime) {
-		return nil, errors.New("unlock time not reached")
-	}
-
-	// Execute unlock script
-	env := NewScriptEnvironment(asset, req.UnlockData)
-	result, err := s.compiler.Execute(asset.LockScript, env)
+	// Get the locked asset
+	asset, err := s.storageManager.GetLockedAsset(req.AssetID)
 	if err != nil {
-		return nil, fmt.Errorf("unlock script execution failed: %w", err)
+		return nil, fmt.Errorf("asset not found: %w", err)
 	}
-
-	if !result.Success {
-		return nil, errors.New("unlock conditions not met")
+	
+	// Check if unlockable
+	now := time.Now()
+	if now.Before(asset.UnlockTime) && !asset.EmergencyUnlock {
+		return nil, fmt.Errorf("asset cannot be unlocked yet")
 	}
-
-	// Verify multi-sig if required
-	if asset.MultiSigRequired {
-		if err := s.verifyMultiSig(asset, req.Signatures); err != nil {
-			return nil, err
-		}
+	
+	// Verify unlock conditions
+	if err := s.verifyUnlockConditions(ctx, asset, req); err != nil {
+		return nil, fmt.Errorf("unlock conditions not met: %w", err)
 	}
-
-	// Process unlock
-	if err := s.processUnlock(asset); err != nil {
-		return nil, err
+	
+	// Update asset status
+	asset.Status = AssetStatusUnlocking
+	asset.UpdatedAt = now
+	
+	if err := s.storageManager.StoreLockedAsset(asset); err != nil {
+		return nil, fmt.Errorf("failed to update asset status: %w", err)
 	}
-
-	delete(s.lockedAssets, req.AssetID)
-
+	
+	// Add to pending unlocks
+	s.pendingUnlocks.Store(asset.ID, asset)
+	
+	// Emit event
+	s.Events.AssetUnlocked.Trigger(asset)
+	
 	return &UnlockAssetResponse{
-		AssetID:    req.AssetID,
+		AssetID:    asset.ID,
 		OutputID:   asset.OutputID,
-		UnlockTime: time.Now(),
-		Status:     "unlocked",
+		UnlockTime: now,
+		Status:     string(asset.Status),
 	}, nil
 }
 
-// ProcessMilestone processes a confirmed milestone
-func (s *Service) ProcessMilestone(msIndex iotago.MilestoneIndex) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Check for assets that should be automatically unlocked
-	for id, asset := range s.lockedAssets {
-		if time.Now().After(asset.UnlockTime) {
-			// Check if auto-unlock is enabled in script
-			env := NewScriptEnvironment(asset, nil)
-			env.Set("auto_unlock", true)
-			
-			result, err := s.compiler.Execute(asset.LockScript, env)
-			if err == nil && result.Success {
-				if err := s.processUnlock(asset); err == nil {
-					delete(s.lockedAssets, id)
-				}
-			}
+func (s *Service) ProcessMilestone(ctx context.Context, msIndex iotago.MilestoneIndex) error {
+	// Process any pending unlocks that can be finalized
+	var toProcess []*LockedAsset
+	
+	s.pendingUnlocks.Range(func(key, value interface{}) bool {
+		asset := value.(*LockedAsset)
+		toProcess = append(toProcess, asset)
+		return true
+	})
+	
+	for _, asset := range toProcess {
+		if err := s.finalizeUnlock(ctx, asset, msIndex); err != nil {
+			s.LogWarnf("failed to finalize unlock for asset %s: %s", asset.ID, err)
 		}
 	}
-
+	
 	return nil
 }
 
-// ProcessPendingUnlocks processes pending unlock requests
-func (s *Service) ProcessPendingUnlocks() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for id, pending := range s.pendingUnlocks {
-		asset, exists := s.lockedAssets[pending.AssetID]
-		if !exists {
-			delete(s.pendingUnlocks, id)
-			continue
-		}
-
-		// Re-check unlock conditions
-		env := NewScriptEnvironment(asset, nil)
-		result, err := s.compiler.Execute(asset.LockScript, env)
-		if err == nil && result.Success {
-			if err := s.processUnlock(asset); err == nil {
-				delete(s.lockedAssets, pending.AssetID)
-				delete(s.pendingUnlocks, id)
+func (s *Service) ProcessPendingUnlocks(ctx context.Context) error {
+	// Get all pending unlocks from storage
+	unlocks, err := s.storageManager.GetPendingUnlocks()
+	if err != nil {
+		return err
+	}
+	
+	now := time.Now()
+	for assetID, unlockTime := range unlocks {
+		if now.Unix() >= unlockTime {
+			asset, err := s.storageManager.GetLockedAsset(assetID)
+			if err != nil {
+				s.LogWarnf("failed to get asset %s: %s", assetID, err)
+				continue
+			}
+			
+			if err := s.finalizeUnlock(ctx, asset, 0); err != nil {
+				s.LogWarnf("failed to finalize unlock for asset %s: %s", assetID, err)
 			}
 		}
 	}
-
+	
 	return nil
+}
+
+func (s *Service) MonitorVerificationHealth(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.LogDebug("Checking verification node health...")
+			// Implement health check logic
+		}
+	}
+}
+
+func (s *Service) OptimizeNodeSelection() {
+	s.LogDebug("Optimizing node selection based on performance metrics")
+	// Implement optimization logic
 }
 
 // Helper methods
 
-func (s *Service) validateTierPermissions(req *LockAssetRequest) error {
-	switch s.config.Tier {
-	case TierBasic:
-		if req.LockDuration > 30*24*time.Hour {
-			return errors.New("basic tier limited to 30 day locks")
-		}
-	case TierStandard:
-		if req.LockDuration > 365*24*time.Hour {
-			return errors.New("standard tier limited to 1 year locks")
-		}
-	case TierPremium:
-		// Premium has higher limits
-	case TierElite:
-		// Elite has no limits
+func (s *Service) validateLockRequest(req *LockAssetRequest) error {
+	if req.OwnerAddress == nil {
+		return fmt.Errorf("owner address is required")
 	}
-	return nil
-}
-
-func (s *Service) generateAssetID(outputID iotago.OutputID, lockTime time.Time) string {
-	h := sha256.New()
-	h.Write(outputID[:])
-	h.Write([]byte(lockTime.Format(time.RFC3339)))
-	return hex.EncodeToString(h.Sum(nil))[:16]
-}
-
-func (s *Service) storeLockedAsset(asset *LockedAsset) error {
-	// Store in database
-	// Implementation depends on storage backend
-	return nil
-}
-
-func (s *Service) loadLockedAssets() error {
-	// Load from database
-	// Implementation depends on storage backend
-	return nil
-}
-
-func (s *Service) processUnlock(asset *LockedAsset) error {
-	// Process the unlock transaction
-	// Implementation depends on UTXO manager
-	return nil
-}
-
-func (s *Service) verifyMultiSig(asset *LockedAsset, signatures [][]byte) error {
-	if len(signatures) < s.config.MinMultiSigSigners {
-		return errors.New("insufficient signatures")
+	
+	if req.LockDuration < s.config.MinLockPeriod {
+		return fmt.Errorf("lock duration must be at least %s", s.config.MinLockPeriod)
 	}
-	// Verify each signature
-	// Implementation depends on crypto library
+	
+	if req.LockDuration > s.config.MaxLockPeriod {
+		return fmt.Errorf("lock duration cannot exceed %s", s.config.MaxLockPeriod)
+	}
+	
+	if len(req.LockScript) > s.config.MaxScriptSize {
+		return fmt.Errorf("lock script exceeds maximum size")
+	}
+	
+	if len(req.MultiSigAddresses) > 0 && req.MinSignatures <= 0 {
+		return fmt.Errorf("minimum signatures must be specified for multi-sig")
+	}
+	
 	return nil
 }
 
-// Request/Response types
-
-type LockAssetRequest struct {
-	OutputID         iotago.OutputID
-	Amount           uint64
-	LockTime         time.Time
-	UnlockTime       time.Time
-	LockDuration     time.Duration
-	Owner            iotago.Address
-	LockScript       []byte
-	MultiSigRequired bool
-	Signers          []iotago.Address
-	Metadata         map[string]string
+func (s *Service) verifyOwnership(output *utxo.Output, address iotago.Address) bool {
+	// Implement ownership verification logic
+	switch out := output.Output().(type) {
+	case *iotago.BasicOutput:
+		return out.UnlockConditionSet().Address().Address.Equal(address)
+	default:
+		return false
+	}
 }
 
-type LockAssetResponse struct {
-	AssetID    string
-	LockTime   time.Time
-	UnlockTime time.Time
-	Status     string
+func (s *Service) verifyUnlockConditions(ctx context.Context, asset *LockedAsset, req *UnlockAssetRequest) error {
+	// Verify multi-sig if required
+	if len(asset.MultiSigAddresses) > 0 {
+		if len(req.Signatures) < asset.MinSignatures {
+			return fmt.Errorf("insufficient signatures")
+		}
+		// Implement signature verification
+	}
+	
+	// Execute lock script if present
+	if asset.LockScript != "" {
+		compiled, err := s.scriptEngine.CompileScript(ctx, asset.LockScript)
+		if err != nil {
+			return fmt.Errorf("failed to compile lock script: %w", err)
+		}
+		
+		env := &lockscript.Environment{
+			Variables: req.UnlockParams,
+			Sender:    asset.OwnerAddress.String(),
+			Timestamp: time.Now(),
+		}
+		
+		result, err := s.scriptEngine.ExecuteScript(ctx, compiled, env)
+		if err != nil {
+			return fmt.Errorf("failed to execute lock script: %w", err)
+		}
+		
+		if !result.Success {
+			return fmt.Errorf("lock script execution failed")
+		}
+	}
+	
+	return nil
 }
 
-type UnlockAssetRequest struct {
-	AssetID    string
-	UnlockData map[string]interface{}
-	Signatures [][]byte
+func (s *Service) finalizeUnlock(ctx context.Context, asset *LockedAsset, msIndex iotago.MilestoneIndex) error {
+	// Update asset status
+	asset.Status = AssetStatusUnlocked
+	asset.UpdatedAt = time.Now()
+	
+	// Store updated asset
+	if err := s.storageManager.StoreLockedAsset(asset); err != nil {
+		return err
+	}
+	
+	// Remove from pending unlocks
+	s.pendingUnlocks.Delete(asset.ID)
+	
+	s.LogInfof("Asset %s unlocked successfully", asset.ID)
+	return nil
 }
 
-type UnlockAssetResponse struct {
-	AssetID    string
-	OutputID   iotago.OutputID
-	UnlockTime time.Time
-	Status     string
+func (s *Service) generateAssetID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func (s *Service) loadScripts() error {
+	scripts, err := s.storageManager.LoadScripts()
+	if err != nil {
+		return err
+	}
+	
+	for _, script := range scripts {
+		if err := s.scriptEngine.LoadScript(script); err != nil {
+			s.LogWarnf("failed to load script: %s", err)
+		}
+	}
+	
+	s.LogInfof("Loaded %d scripts", len(scripts))
+	return nil
+}
+
+func (s *Service) loadPendingUnlocks() error {
+	unlocks, err := s.storageManager.GetPendingUnlocks()
+	if err != nil {
+		return err
+	}
+	
+	for assetID := range unlocks {
+		asset, err := s.storageManager.GetLockedAsset(assetID)
+		if err != nil {
+			s.LogWarnf("failed to load asset %s: %s", assetID, err)
+			continue
+		}
+		s.pendingUnlocks.Store(assetID, asset)
+	}
+	
+	s.LogInfof("Loaded %d pending unlocks", len(unlocks))
+	return nil
+}
+
+func (s *Service) Shutdown() {
+	s.shutdownOnce.Do(func() {
+		s.isShutdown = true
+		close(s.shutdownChan)
+		
+		// Stop token manager
+		if s.tokenManager != nil {
+			s.tokenManager.Stop()
+		}
+		
+		s.LogInfo("LockBox service shutdown complete")
+	})
 }
