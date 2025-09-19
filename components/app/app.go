@@ -16,6 +16,7 @@ import (
 	"github.com/iotaledger/lockbox/v2/components/inx"
 	"github.com/iotaledger/lockbox/v2/components/lockbox"
 	"github.com/iotaledger/lockbox/v2/components/p2p"
+	"github.com/iotaledger/lockbox/v2/components/pow"
 	"github.com/iotaledger/lockbox/v2/components/profile"
 	"github.com/iotaledger/lockbox/v2/components/prometheus"
 	"github.com/iotaledger/lockbox/v2/components/protocfg"
@@ -30,7 +31,10 @@ import (
 )
 
 var (
-	Name    = "LockSmith"
+	// Name is the name of the app.
+	Name = "LockBox"
+
+	// Version of the app.
 	Version = "2.0.2"
 )
 
@@ -55,6 +59,7 @@ Command line flags:
 			snapshot.Component,
 			pruning.Component,
 			profiling.Component,
+			pow.Component,
 			restapi.Component,
 			coreapi.Component,
 			autopeering.Component,

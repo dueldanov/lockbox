@@ -1,4 +1,3 @@
-//nolint:forcetypeassert,varnamelen,revive,exhaustruct // we don't care about these linters in test cases
 package dag_test
 
 import (
@@ -7,10 +6,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotaledger/hornet/v2/pkg/dag"
-	"github.com/iotaledger/hornet/v2/pkg/model/syncmanager"
-	"github.com/iotaledger/hornet/v2/pkg/testsuite"
-	"github.com/iotaledger/hornet/v2/pkg/whiteflag"
+	"github.com/iotaledger/lockbox/v2/pkg/dag"
+	"github.com/iotaledger/lockbox/v2/pkg/model/syncmanager"
+	"github.com/iotaledger/lockbox/v2/pkg/testsuite"
+	"github.com/iotaledger/lockbox/v2/pkg/whiteflag"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 
@@ -30,37 +29,46 @@ func TestConeRootIndexes(t *testing.T) {
 	minBlocksPerMilestone := 10
 	maxBlocksPerMilestone := 100
 
-	// build a tangle with 30 milestones and 10 - 100 blocks between the milestones
-	_, _ = te.BuildTangle(initBlocksCount, BelowMaxDepth, milestonesCount, minBlocksPerMilestone, maxBlocksPerMilestone,
-		nil,
+	_, _ = te.BuildTangle(initBlocksCount, BelowMaxDepth, milestonesCount, minBlocksPerMilestone, maxBlocksPerMilestone, nil,
 		func(blockIDs iotago.BlockIDs, blockIDsPerMilestones []iotago.BlockIDs) iotago.BlockIDs {
 			return iotago.BlockIDs{blockIDs[len(blockIDs)-1]}
 		},
 		func(msIndex iotago.MilestoneIndex, blockIDs iotago.BlockIDs, _ *whiteflag.Confirmation, _ *whiteflag.ConfirmedMilestoneStats) {
+
 			latestMilestone := te.Milestones[len(te.Milestones)-1]
 			cmi := latestMilestone.Milestone().Index()
 
-			cachedBlockMeta := te.Storage().CachedBlockMetadataOrNil(blockIDs[len(blockIDs)-1])
+			cachedBlockMeta := te.Storage().CachedBlockMetadataOrNil(blockIDs[len(blockIDs)-1]) //nolint:ifshort // false positive
+
 			ycri, ocri, err := dag.ConeRootIndexes(context.Background(), te.Storage(), cachedBlockMeta, cmi)
 			require.NoError(te.TestInterface, err)
 
-			minOldestConeRootIndex := iotago.MilestoneIndex(1)
+			minOldestConeRootIndex := iotago.MilestoneIndex(1) // should be 1 if not limited by BelowMaxDepth
 			if cmi > syncmanager.MilestoneIndexDelta(BelowMaxDepth) {
+				// OCRI should be >=  CMI - BelowMaxDepth
 				minOldestConeRootIndex = cmi - syncmanager.MilestoneIndexDelta(BelowMaxDepth)
 			}
 
+			// OCRI should be >= min allowed cone root index
 			require.GreaterOrEqual(te.TestInterface, ocri, minOldestConeRootIndex)
+			// OCRI should be lower or equal to the current confirmed milestone index of that block
 			require.LessOrEqual(te.TestInterface, ocri, msIndex)
 
+			// YCRI is the highest referenced index
+			// YCRI should be >= min allowed cone root index
 			require.GreaterOrEqual(te.TestInterface, ycri, minOldestConeRootIndex)
+			// YCRI should be lower or equal to the current confirmed milestone index of that block
 			require.LessOrEqual(te.TestInterface, ycri, msIndex)
+
 		},
 	)
+
+	// build additional blocks directly referencing the below max depth point
 
 	latestMilestone := te.Milestones[len(te.Milestones)-1]
 	cmi := latestMilestone.Milestone().Index()
 
-	// Use Null hash and last milestone ID as parents
+	// issue block that should be below max depth
 	parents := append(latestMilestone.Milestone().Parents(), iotago.EmptyBlockID())
 	block := te.NewBlockBuilder("below max depth").Parents(parents.RemoveDupsAndSort()).BuildTaggedData().Store()
 
@@ -68,7 +76,7 @@ func TestConeRootIndexes(t *testing.T) {
 	ycri, ocri, err := dag.ConeRootIndexes(context.Background(), te.Storage(), cachedBlockMeta, cmi)
 	require.NoError(te.TestInterface, err)
 
-	// NullHash is SEP for index 0
+	// since the block references at least one parent that is below max depth, the whole block should be below max depth and not be picked up by the milestone
 	require.Equal(te.TestInterface, iotago.MilestoneIndex(0), ocri)
 	require.LessOrEqual(te.TestInterface, ycri, cmi)
 }
