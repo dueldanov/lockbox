@@ -7,6 +7,7 @@ echo "🔒 Starting LockBox Node..."
 # Check if snapshot exists
 if [ ! -f "lockbox_devnet_snapshots/full_snapshot.bin" ]; then
     echo "❌ Snapshot not found! Creating genesis snapshot..."
+    mkdir -p lockbox_devnet_snapshots
     ./lockbox-node tool snap-gen \
         --protocolParametersPath=protocol_parameters_devnet.json \
         --mintAddress=tst1qpszqzadsym6wpppd6z037dvlejmjuke7s24hm95s9fg9vpua7vlupxvxq2 \
