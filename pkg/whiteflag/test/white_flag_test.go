@@ -9,10 +9,10 @@ import (
 	"github.com/stretchr/testify/require"
 	_ "golang.org/x/crypto/blake2b"
 
-	"github.com/iotaledger/hornet/v2/pkg/model/storage"
-	"github.com/iotaledger/hornet/v2/pkg/model/utxo"
-	"github.com/iotaledger/hornet/v2/pkg/testsuite"
-	"github.com/iotaledger/hornet/v2/pkg/testsuite/utils"
+	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
+	"github.com/dueldanov/lockbox/v2/pkg/model/utxo"
+	"github.com/dueldanov/lockbox/v2/pkg/testsuite"
+	"github.com/dueldanov/lockbox/v2/pkg/testsuite/utils"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

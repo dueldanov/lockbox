@@ -6,10 +6,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotaledger/lockbox/v2/pkg/dag"
-	"github.com/iotaledger/lockbox/v2/pkg/model/syncmanager"
-	"github.com/iotaledger/lockbox/v2/pkg/testsuite"
-	"github.com/iotaledger/lockbox/v2/pkg/whiteflag"
+	"github.com/dueldanov/lockbox/v2/pkg/dag"
+	"github.com/dueldanov/lockbox/v2/pkg/model/syncmanager"
+	"github.com/dueldanov/lockbox/v2/pkg/testsuite"
+	"github.com/dueldanov/lockbox/v2/pkg/whiteflag"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

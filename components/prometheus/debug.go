@@ -4,9 +4,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/iotaledger/hive.go/runtime/syncutils"
-	"github.com/iotaledger/hornet/v2/pkg/pruning"
-	"github.com/iotaledger/hornet/v2/pkg/snapshot"
-	"github.com/iotaledger/hornet/v2/pkg/whiteflag"
+	"github.com/dueldanov/lockbox/v2/pkg/pruning"
+	"github.com/dueldanov/lockbox/v2/pkg/snapshot"
+	"github.com/dueldanov/lockbox/v2/pkg/whiteflag"
 )
 
 var (

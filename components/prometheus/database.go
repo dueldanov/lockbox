@@ -5,9 +5,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/iotaledger/hornet/v2/pkg/database"
-	"github.com/iotaledger/hornet/v2/pkg/metrics"
-	"github.com/iotaledger/hornet/v2/pkg/model/storage"
+	"github.com/dueldanov/lockbox/v2/pkg/database"
+	"github.com/dueldanov/lockbox/v2/pkg/metrics"
+	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
 )
 
 type storageMetrics struct {

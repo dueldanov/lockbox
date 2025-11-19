@@ -1,0 +1,135 @@
+{
+  "app": {
+    "checkForUpdates": false,
+    "shutdown": {
+      "stopGracePeriod": "5m",
+      "log": {
+        "enabled": true,
+        "filePath": "shutdown.log"
+      }
+    }
+  },
+  "logger": {
+    "level": "info",
+    "disableCaller": true,
+    "disableStacktrace": false,
+    "stacktraceLevel": "panic",
+    "encoding": "console",
+    "encodingConfig": {
+      "timeEncoder": "rfc3339"
+    },
+    "outputPaths": [
+      "stdout"
+    ],
+    "disableEvents": true
+  },
+  "node": {
+    "profile": "auto",
+    "alias": "LockBox Devnet Node"
+  },
+  "protocol": {
+    "targetNetworkName": "lockbox-devnet",
+    "milestonePublicKeyCount": 2,
+    "baseToken": {
+      "name": "LockCoin",
+      "tickerSymbol": "LOCK",
+      "unit": "LOCK",
+      "subunit": "microLOCK",
+      "decimals": 6,
+      "useMetricPrefix": false
+    },
+    "publicKeyRanges": [
+      {
+        "key": "ed3c3f1a319ff4e909cf2771d79fece0ac9bd9fd2ee49ea6c0885c9cb3b1248c",
+        "start": 0,
+        "end": 0
+      },
+      {
+        "key": "f6752f5f46a53364e2ee9c4d662d762a81efd51010282a75cd6bd03f28ef349c",
+        "start": 0,
+        "end": 0
+      }
+    ]
+  },
+  "db": {
+    "engine": "pebble",
+    "path": "lockbox_devnet_db",
+    "autoRevalidation": false,
+    "checkLedgerStateOnStartup": false
+  },
+  "pow": {
+    "refreshTipsInterval": "5s"
+  },
+  "p2p": {
+    "bindMultiAddresses": [
+      "/ip4/127.0.0.1/tcp/15600"
+    ],
+    "connectionManager": {
+      "highWatermark": 10,
+      "lowWatermark": 5
+    },
+    "identityPrivateKey": "",
+    "db": {
+      "path": "lockbox_devnet_p2pstore"
+    },
+    "reconnectInterval": "30s",
+    "gossip": {
+      "unknownPeersLimit": 0,
+      "streamReadTimeout": "1m",
+      "streamWriteTimeout": "10s"
+    },
+    "autopeering": {
+      "enabled": false,
+      "bindAddress": "127.0.0.1:14626",
+      "entryNodes": [],
+      "entryNodesPreferIPv6": false,
+      "runAsEntryNode": false
+    }
+  },
+  "requests": {
+    "discardOlderThan": "15s",
+    "pendingReEnqueueInterval": "5s"
+  },
+  "tangle": {
+    "milestoneTimeout": "30s",
+    "maxDeltaBlockYoungestConeRootIndexToCMI": 8,
+    "maxDeltaBlockOldestConeRootIndexToCMI": 13,
+    "whiteFlagParentsSolidTimeout": "2s"
+  },
+  "snapshots": {
+    "fullPath": "lockbox_devnet_snapshots/full_snapshot.bin",
+    "deltaPath": "lockbox_devnet_snapshots/delta_snapshot.bin",
+    "downloadURLs": []
+  },
+  "pruning": {
+    "milestones": {
+      "enabled": false,
+      "maxMilestonesToKeep": 60480
+    },
+    "size": {
+      "enabled": false,
+      "targetSize": "30GB",
+      "thresholdPercentage": 10,
+      "cooldownTime": "5m"
+    },
+    "pruneReceipts": false
+  },
+  "profiling": {
+    "enabled": false,
+    "bindAddress": "localhost:6060"
+  },
+  "restAPI": {
+    "enabled": true,
+    "bindAddress": "127.0.0.1:14265",
+    "publicRoutes": [
+      "/health",
+      "/api/*"
+    ],
+    "protectedRoutes": [],
+    "pow": {
+      "enabled": true
+    },
+    "debugRequestLoggerEnabled": true
+  }
+}
+

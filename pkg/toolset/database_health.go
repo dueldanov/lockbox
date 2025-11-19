@@ -11,8 +11,8 @@ import (
 	"github.com/iotaledger/hive.go/kvstore"
 	hivedb "github.com/iotaledger/hive.go/kvstore/database"
 	"github.com/iotaledger/hive.go/runtime/ioutils"
-	"github.com/iotaledger/hornet/v2/pkg/common"
-	"github.com/iotaledger/hornet/v2/pkg/database"
+	"github.com/dueldanov/lockbox/v2/pkg/common"
+	"github.com/dueldanov/lockbox/v2/pkg/database"
 )
 
 func databaseHealth(args []string) error {

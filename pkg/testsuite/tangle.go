@@ -6,11 +6,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotaledger/hornet/v2/pkg/dag"
-	"github.com/iotaledger/hornet/v2/pkg/model/storage"
-	"github.com/iotaledger/hornet/v2/pkg/tangle"
-	"github.com/iotaledger/hornet/v2/pkg/testsuite/utils"
-	"github.com/iotaledger/hornet/v2/pkg/whiteflag"
+	"github.com/dueldanov/lockbox/v2/pkg/dag"
+	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
+	"github.com/dueldanov/lockbox/v2/pkg/tangle"
+	"github.com/dueldanov/lockbox/v2/pkg/testsuite/utils"
+	"github.com/dueldanov/lockbox/v2/pkg/whiteflag"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

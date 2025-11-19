@@ -7,10 +7,10 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/iotaledger/hive.go/runtime/contextutils"
-	"github.com/iotaledger/hornet/v2/pkg/common"
-	"github.com/iotaledger/hornet/v2/pkg/model/storage"
-	"github.com/iotaledger/hornet/v2/pkg/snapshot"
-	"github.com/iotaledger/hornet/v2/pkg/utils"
+	"github.com/dueldanov/lockbox/v2/pkg/common"
+	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
+	"github.com/dueldanov/lockbox/v2/pkg/snapshot"
+	"github.com/dueldanov/lockbox/v2/pkg/utils"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

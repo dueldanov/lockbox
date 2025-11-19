@@ -6,16 +6,16 @@ import (
 
 	"go.uber.org/dig"
 	"github.com/iotaledger/hive.go/app"
-	"github.com/iotaledger/hornet/v2/pkg/components"
-	"github.com/iotaledger/hornet/v2/pkg/daemon"
-	"github.com/iotaledger/hornet/v2/pkg/lockbox"
-	"github.com/iotaledger/hornet/v2/pkg/model/storage"
-	"github.com/iotaledger/hornet/v2/pkg/model/syncmanager"
-	"github.com/iotaledger/hornet/v2/pkg/model/utxo"
-	"github.com/iotaledger/hornet/v2/pkg/protocol"
-	"github.com/iotaledger/hornet/v2/pkg/tangle"
+	"github.com/dueldanov/lockbox/v2/pkg/components"
+	"github.com/dueldanov/lockbox/v2/pkg/daemon"
+	"github.com/dueldanov/lockbox/v2/internal/service"
+	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
+	"github.com/dueldanov/lockbox/v2/pkg/model/syncmanager"
+	"github.com/dueldanov/lockbox/v2/pkg/model/utxo"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol"
+	"github.com/dueldanov/lockbox/v2/pkg/tangle"
 	iotago "github.com/iotaledger/iota.go/v3"
-	"github.com/iotaledger/lockbox/v2/lockbox/monitoring"
+	"github.com/dueldanov/lockbox/v2/internal/monitoring"
 )
 
 func init() {

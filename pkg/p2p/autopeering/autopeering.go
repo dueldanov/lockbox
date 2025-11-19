@@ -24,7 +24,7 @@ import (
 	"github.com/iotaledger/hive.go/crypto/ed25519"
 	"github.com/iotaledger/hive.go/crypto/identity"
 	"github.com/iotaledger/hive.go/logger"
-	"github.com/iotaledger/hornet/v2/pkg/p2p"
+	"github.com/dueldanov/lockbox/v2/pkg/p2p"
 )
 
 const (

@@ -14,7 +14,7 @@ import (
 
 	"github.com/iotaledger/hive.go/app/configuration"
 	"github.com/iotaledger/hive.go/web/basicauth"
-	"github.com/iotaledger/hornet/v2/pkg/utils"
+	"github.com/dueldanov/lockbox/v2/pkg/utils"
 )
 
 func readPasswordFromEnv() ([]byte, error) {

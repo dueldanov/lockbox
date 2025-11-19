@@ -1,13 +1,13 @@
-module github.com/iotaledger/hornet/tools/gendoc
+module github.com/dueldanov/lockbox/tools/gendoc
 
 go 1.21
 
-replace github.com/iotaledger/hornet/v2 => ../../
+replace github.com/dueldanov/lockbox/v2 => ../../
 
 require (
 	github.com/iotaledger/hive.go/app v0.0.0-20230629181801-64c530ff9d15
 	github.com/iotaledger/hive.go/apputils v1.0.0-rc.1.0.20230417125513-e2e89991217f
-	github.com/iotaledger/hornet/v2 v2.0.0-00010101000000-000000000000
+	github.com/dueldanov/lockbox/v2 v2.0.0-00010101000000-000000000000
 )
 
 require (

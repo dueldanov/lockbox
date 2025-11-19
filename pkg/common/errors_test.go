@@ -8,7 +8,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotaledger/hornet/v2/pkg/common"
+	"github.com/dueldanov/lockbox/v2/pkg/common"
 )
 
 func TestSoftError_Error(t *testing.T) {

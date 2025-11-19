@@ -1,36 +1,104 @@
-# LOCKBOX - The IOTA node
+# LockBox - Private IOTA Node
 
-![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/iotaledger/hornet/build_HORNET.yml?style=for-the-badge&branch=develop) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/iotaledger/hornet?style=for-the-badge) ![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/iotaledger/hornet?style=for-the-badge) ![GitHub](https://img.shields.io/github/license/iotaledger/hornet?style=for-the-badge)
+![GitHub](https://img.shields.io/github/license/dueldanov/lockbox?style=for-the-badge)
 
-<p align="center"><img src="img/HORNET_logo.svg" width="600"/></p>
-
-LOCKBOX is a powerful IOTA fullnode software written in Go.
-It is easy to install and maintain.
+LockBox is a fork of IOTA HORNET v2.0.2, designed for running private, isolated IOTA networks.
+It is a powerful fullnode software written in Go, optimized for private devnet deployments.
 
 ---
 
-In this repository you will find the following branches:
+## Quick Start
 
-- `develop`: default branch where all development will get merged to. This represents the next iteration of the node.
-- `staging`: this branch contains the latest released code targeted for the [shimmer network](https://shimmer.network)
-- `production`: this branch contains the latest released code targeted for the [IOTA mainnet](https://iota.org)
+### Building from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/dueldanov/lockbox.git
+cd lockbox
+
+# Install dependencies
+go mod tidy
+
+# Build the binary
+go build -o lockbox-node
+
+# Or use the build script
+./scripts/build_hornet.sh
+```
+
+### 🚀 Running a Devnet Node (Easy Way)
+
+```bash
+# Start the node (auto-creates snapshot if needed)
+./start.sh
+
+# Check status
+./status.sh
+
+# Stop the node
+./stop.sh
+```
+
+📖 **See [QUICKSTART.md](QUICKSTART.md) for detailed instructions and troubleshooting.**
+
+### 📖 Manual Start
+
+```bash
+# 1. Create genesis snapshot (first time only)
+./lockbox-node tool snap-gen \
+  --protocolParametersPath=protocol_parameters_devnet.json \
+  --mintAddress=tst1qpszqzadsym6wpppd6z037dvlejmjuke7s24hm95s9fg9vpua7vlupxvxq2 \
+  --treasuryAllocation=0 \
+  --outputPath=lockbox_devnet_snapshots/full_snapshot.bin
+
+# 2. Start the node
+./lockbox-node --config config_lockbox_devnet.json
+```
+
+The node will:
+- Start on localhost (127.0.0.1) only
+- Use REST API on port 14265
+- Store data in `lockbox_devnet_db/`
+- NOT connect to any public IOTA networks
+
+### Accessing the Node
+
+Once running, you can access the REST API:
+
+```bash
+# Check node health
+curl http://127.0.0.1:14265/health
+
+# Get node info
+curl http://127.0.0.1:14265/api/core/v2/info | jq .
+```
 
 ---
-
-_Table of contents_
-
-<!--ts-->
-
-- [LOCKBOX - The IOTA node](#hornet---the-iota-node)
-  - [Documentation](#documentation)
-  - [Configuration](#configuration)
-<!--te-->
-
-## Documentation
-
-Hornet documentation can be found here: https://wiki.iota.org/hornet/welcome
-
 
 ## Configuration
 
-An overview over all configuration parameters can be found [here.](configuration.md)
+- **Devnet Config**: `config_lockbox_devnet.json` - Isolated private network
+- **Private Tangle**: `private_tangle/config_private_tangle.json` - Multi-node setup
+- **Defaults**: `config_defaults.json` - Base configuration
+
+An overview of all configuration parameters can be found [here.](configuration.md)
+
+---
+
+## Differences from IOTA HORNET
+
+This fork includes:
+- Renamed module path: `github.com/dueldanov/lockbox/v2`
+- Binary name: `lockbox-node` (instead of `hornet`)
+- Devnet configuration for isolated testing
+- LockBox branding in logs and CLI
+
+All protocol logic, consensus mechanisms, and tangle internals remain unchanged from HORNET v2.0.2.
+
+---
+
+## License
+
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+
+Original HORNET project: https://github.com/iotaledger/hornet

@@ -7,8 +7,8 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/iotaledger/hive.go/serializer/v2"
-	"github.com/iotaledger/hornet/v2/pkg/protocol/protocol/message"
-	"github.com/iotaledger/hornet/v2/pkg/protocol/protocol/tlv"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol/protocol/message"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol/protocol/tlv"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

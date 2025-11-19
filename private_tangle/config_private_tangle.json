@@ -4,7 +4,7 @@
     "stopGracePeriod": "5m"
   },
   "node": {
-    "alias": "HORNET private-tangle node"
+    "alias": "LockBox private-tangle node"
   },
   "protocol": {
     "targetNetworkName": "private_tangle1",

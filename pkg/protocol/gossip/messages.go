@@ -1,8 +1,8 @@
 package gossip
 
 import (
-	hiveproto "github.com/iotaledger/hornet/v2/pkg/protocol/protocol/message"
-	"github.com/iotaledger/hornet/v2/pkg/protocol/protocol/tlv"
+	hiveproto "github.com/dueldanov/lockbox/v2/pkg/protocol/protocol/message"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol/protocol/tlv"
 )
 
 var (

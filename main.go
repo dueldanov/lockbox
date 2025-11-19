@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/iotaledger/lockbox/v2/components/app"
+	"github.com/dueldanov/lockbox/v2/components/app"
 )
 
 func main() {

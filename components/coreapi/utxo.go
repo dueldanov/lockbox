@@ -7,8 +7,8 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/iotaledger/hive.go/kvstore"
-	"github.com/iotaledger/hornet/v2/pkg/model/utxo"
-	"github.com/iotaledger/hornet/v2/pkg/restapi"
+	"github.com/dueldanov/lockbox/v2/pkg/model/utxo"
+	"github.com/dueldanov/lockbox/v2/pkg/restapi"
 	"github.com/iotaledger/inx-app/pkg/httpserver"
 	iotago "github.com/iotaledger/iota.go/v3"
 )

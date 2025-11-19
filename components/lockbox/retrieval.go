@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/iotaledger/hornet/v2/pkg/daemon"
+	"github.com/dueldanov/lockbox/v2/pkg/daemon"
 )
 
 // StartRetrievalServices starts all retrieval and verification related services

@@ -7,13 +7,13 @@ import (
 	"go.uber.org/dig"
 
 	"github.com/iotaledger/hive.go/app"
-	"github.com/iotaledger/hornet/v2/pkg/components"
-	"github.com/iotaledger/hornet/v2/pkg/daemon"
-	"github.com/iotaledger/hornet/v2/pkg/database"
-	"github.com/iotaledger/hornet/v2/pkg/model/storage"
-	"github.com/iotaledger/hornet/v2/pkg/model/syncmanager"
-	"github.com/iotaledger/hornet/v2/pkg/pruning"
-	"github.com/iotaledger/hornet/v2/pkg/snapshot"
+	"github.com/dueldanov/lockbox/v2/pkg/components"
+	"github.com/dueldanov/lockbox/v2/pkg/daemon"
+	"github.com/dueldanov/lockbox/v2/pkg/database"
+	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
+	"github.com/dueldanov/lockbox/v2/pkg/model/syncmanager"
+	"github.com/dueldanov/lockbox/v2/pkg/pruning"
+	"github.com/dueldanov/lockbox/v2/pkg/snapshot"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

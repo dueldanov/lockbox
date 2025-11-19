@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/iotaledger/hornet/v2/pkg/tpkg"
+	"github.com/dueldanov/lockbox/v2/pkg/tpkg"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

@@ -13,11 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/iotaledger/hive.go/serializer/v2"
-	"github.com/iotaledger/hornet/v2/pkg/metrics"
-	"github.com/iotaledger/hornet/v2/pkg/model/storage"
-	"github.com/iotaledger/hornet/v2/pkg/p2p"
-	"github.com/iotaledger/hornet/v2/pkg/protocol/gossip"
-	"github.com/iotaledger/hornet/v2/pkg/testsuite"
+	"github.com/dueldanov/lockbox/v2/pkg/metrics"
+	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
+	"github.com/dueldanov/lockbox/v2/pkg/p2p"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol/gossip"
+	"github.com/dueldanov/lockbox/v2/pkg/testsuite"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

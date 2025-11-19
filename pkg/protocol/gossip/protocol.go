@@ -10,8 +10,8 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/iotaledger/hive.go/runtime/event"
-	"github.com/iotaledger/hornet/v2/pkg/metrics"
-	"github.com/iotaledger/hornet/v2/pkg/protocol/protocol"
+	"github.com/dueldanov/lockbox/v2/pkg/metrics"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol/protocol"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

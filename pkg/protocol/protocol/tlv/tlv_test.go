@@ -6,8 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/iotaledger/hornet/v2/pkg/protocol/protocol/message"
-	"github.com/iotaledger/hornet/v2/pkg/protocol/protocol/tlv"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol/protocol/message"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol/protocol/tlv"
 )
 
 const (

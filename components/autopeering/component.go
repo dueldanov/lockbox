@@ -17,9 +17,9 @@ import (
 	"github.com/iotaledger/hive.go/crypto/ed25519"
 	hivedb "github.com/iotaledger/hive.go/kvstore/database"
 	"github.com/iotaledger/hive.go/lo"
-	"github.com/iotaledger/hornet/v2/pkg/daemon"
-	"github.com/iotaledger/hornet/v2/pkg/p2p"
-	"github.com/iotaledger/hornet/v2/pkg/p2p/autopeering"
+	"github.com/dueldanov/lockbox/v2/pkg/daemon"
+	"github.com/dueldanov/lockbox/v2/pkg/p2p"
+	"github.com/dueldanov/lockbox/v2/pkg/p2p/autopeering"
 )
 
 func init() {

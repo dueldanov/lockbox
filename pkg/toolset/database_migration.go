@@ -13,8 +13,8 @@ import (
 	"github.com/iotaledger/hive.go/kvstore"
 	hivedb "github.com/iotaledger/hive.go/kvstore/database"
 	"github.com/iotaledger/hive.go/runtime/ioutils"
-	"github.com/iotaledger/hornet/v2/pkg/database"
-	"github.com/iotaledger/hornet/v2/pkg/utils"
+	"github.com/dueldanov/lockbox/v2/pkg/database"
+	"github.com/dueldanov/lockbox/v2/pkg/utils"
 )
 
 func databaseMigration(args []string) error {

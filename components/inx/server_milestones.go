@@ -10,10 +10,10 @@ import (
 
 	"github.com/iotaledger/hive.go/runtime/event"
 	"github.com/iotaledger/hive.go/runtime/workerpool"
-	"github.com/iotaledger/hornet/v2/pkg/common"
-	"github.com/iotaledger/hornet/v2/pkg/dag"
-	"github.com/iotaledger/hornet/v2/pkg/model/storage"
-	"github.com/iotaledger/hornet/v2/pkg/tangle"
+	"github.com/dueldanov/lockbox/v2/pkg/common"
+	"github.com/dueldanov/lockbox/v2/pkg/dag"
+	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
+	"github.com/dueldanov/lockbox/v2/pkg/tangle"
 	inx "github.com/iotaledger/inx/go"
 	iotago "github.com/iotaledger/iota.go/v3"
 )

@@ -3,8 +3,8 @@ package tangle
 import (
 	"time"
 
-	"github.com/iotaledger/hornet/v2/pkg/model/syncmanager"
-	"github.com/iotaledger/hornet/v2/pkg/protocol/gossip"
+	"github.com/dueldanov/lockbox/v2/pkg/model/syncmanager"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol/gossip"
 )
 
 const (

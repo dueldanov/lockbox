@@ -7,8 +7,8 @@ import (
 	
 	"github.com/stretchr/testify/require"
 	
-	"github.com/iotaledger/lockbox/v2/lockbox"
-	"github.com/iotaledger/lockbox/v2/lockbox/verification"
+	"github.com/dueldanov/lockbox/v2/internal/service"
+	"github.com/dueldanov/lockbox/v2/internal/verification"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

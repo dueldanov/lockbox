@@ -15,7 +15,7 @@ import (
 	"github.com/iotaledger/hive.go/app/configuration"
 	hivecrypto "github.com/iotaledger/hive.go/crypto"
 	"github.com/iotaledger/hive.go/crypto/pem"
-	"github.com/iotaledger/hornet/v2/pkg/p2p"
+	"github.com/dueldanov/lockbox/v2/pkg/p2p"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

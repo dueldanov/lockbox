@@ -25,7 +25,7 @@
   },
   "node": {
     "profile": "auto",
-    "alias": "HORNET node"
+    "alias": "LockBox Node"
   },
   "protocol": {
     "targetNetworkName": "iota-mainnet",

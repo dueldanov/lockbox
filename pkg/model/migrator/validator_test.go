@@ -7,7 +7,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotaledger/hornet/v2/pkg/model/migrator"
+	"github.com/dueldanov/lockbox/v2/pkg/model/migrator"
 	"github.com/iotaledger/iota.go/address"
 	"github.com/iotaledger/iota.go/api"
 	"github.com/iotaledger/iota.go/encoding/t5b1"

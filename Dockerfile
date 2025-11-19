@@ -3,10 +3,10 @@ FROM golang:1.21-bullseye AS build
 
 ARG BUILD_TAGS=rocksdb
 
-LABEL org.label-schema.description="HORNET - The IOTA node"
-LABEL org.label-schema.name="iotaledger/hornet"
+LABEL org.label-schema.description="LockBox - Private IOTA Node"
+LABEL org.label-schema.name="dueldanov/lockbox"
 LABEL org.label-schema.schema-version="1.0"
-LABEL org.label-schema.vcs-url="https://github.com/iotaledger/hornet"
+LABEL org.label-schema.vcs-url="https://github.com/dueldanov/lockbox"
 
 # Ensure ca-certificates are up to date
 RUN update-ca-certificates
@@ -29,7 +29,7 @@ RUN go mod verify
 COPY . .
 
 # Build the binary
-RUN go build -o /app/hornet -a -tags="$BUILD_TAGS" -ldflags='-w -s'
+RUN go build -o /app/lockbox-node -a -tags="$BUILD_TAGS" -ldflags='-w -s'
 
 # Copy the assets
 COPY ./config_defaults.json /app/config.json
@@ -51,7 +51,7 @@ EXPOSE 8091/tcp
 EXPOSE 1883/tcp
 EXPOSE 9029/tcp
 
-HEALTHCHECK --interval=10s --timeout=5s --retries=30 CMD ["/app/hornet", "tools", "node-info"]
+HEALTHCHECK --interval=10s --timeout=5s --retries=30 CMD ["/app/lockbox-node", "tools", "node-info"]
 
 # Copy the app dir into distroless image
 COPY --chown=nonroot:nonroot --from=build /app /app
@@ -59,4 +59,4 @@ COPY --chown=nonroot:nonroot --from=build /app /app
 WORKDIR /app
 USER nonroot
 
-ENTRYPOINT ["/app/hornet"]
+ENTRYPOINT ["/app/lockbox-node"]

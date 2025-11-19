@@ -9,8 +9,8 @@ import (
 
 	"github.com/iotaledger/hive.go/app/configuration"
 	hivedb "github.com/iotaledger/hive.go/kvstore/database"
-	snapCore "github.com/iotaledger/hornet/v2/components/snapshot"
-	"github.com/iotaledger/hornet/v2/pkg/snapshot"
+	snapCore "github.com/dueldanov/lockbox/v2/components/snapshot"
+	"github.com/dueldanov/lockbox/v2/pkg/snapshot"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

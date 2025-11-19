@@ -14,7 +14,7 @@ import (
 	"github.com/iotaledger/hive.go/kvstore/rocksdb"
 	"github.com/iotaledger/hive.go/runtime/event"
 	"github.com/iotaledger/hive.go/runtime/ioutils"
-	"github.com/iotaledger/hornet/v2/pkg/metrics"
+	"github.com/dueldanov/lockbox/v2/pkg/metrics"
 )
 
 var (

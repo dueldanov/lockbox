@@ -7,27 +7,27 @@ import (
 	"github.com/iotaledger/hive.go/app"
 	"github.com/iotaledger/hive.go/app/components/profiling"
 	"github.com/iotaledger/hive.go/app/components/shutdown"
-	"github.com/iotaledger/lockbox/v2/components/autopeering"
-	"github.com/iotaledger/lockbox/v2/components/coreapi"
-	dashboard_metrics "github.com/iotaledger/lockbox/v2/components/dashboard-metrics"
-	"github.com/iotaledger/lockbox/v2/components/database"
-	"github.com/iotaledger/lockbox/v2/components/debug"
-	"github.com/iotaledger/lockbox/v2/components/gossip"
-	"github.com/iotaledger/lockbox/v2/components/inx"
-	"github.com/iotaledger/lockbox/v2/components/lockbox"
-	"github.com/iotaledger/lockbox/v2/components/p2p"
-	"github.com/iotaledger/lockbox/v2/components/pow"
-	"github.com/iotaledger/lockbox/v2/components/profile"
-	"github.com/iotaledger/lockbox/v2/components/prometheus"
-	"github.com/iotaledger/lockbox/v2/components/protocfg"
-	"github.com/iotaledger/lockbox/v2/components/pruning"
-	"github.com/iotaledger/lockbox/v2/components/receipt"
-	"github.com/iotaledger/lockbox/v2/components/restapi"
-	"github.com/iotaledger/lockbox/v2/components/snapshot"
-	"github.com/iotaledger/lockbox/v2/components/tangle"
-	"github.com/iotaledger/lockbox/v2/components/urts"
-	"github.com/iotaledger/lockbox/v2/components/warpsync"
-	"github.com/iotaledger/lockbox/v2/pkg/toolset"
+	"github.com/dueldanov/lockbox/v2/components/autopeering"
+	"github.com/dueldanov/lockbox/v2/components/coreapi"
+	dashboard_metrics "github.com/dueldanov/lockbox/v2/components/dashboard-metrics"
+	"github.com/dueldanov/lockbox/v2/components/database"
+	"github.com/dueldanov/lockbox/v2/components/debug"
+	"github.com/dueldanov/lockbox/v2/components/gossip"
+	"github.com/dueldanov/lockbox/v2/components/inx"
+	// "github.com/dueldanov/lockbox/v2/components/lockbox" // TODO: Fix import cycles
+	"github.com/dueldanov/lockbox/v2/components/p2p"
+	"github.com/dueldanov/lockbox/v2/components/pow"
+	"github.com/dueldanov/lockbox/v2/components/profile"
+	"github.com/dueldanov/lockbox/v2/components/prometheus"
+	"github.com/dueldanov/lockbox/v2/components/protocfg"
+	"github.com/dueldanov/lockbox/v2/components/pruning"
+	"github.com/dueldanov/lockbox/v2/components/receipt"
+	"github.com/dueldanov/lockbox/v2/components/restapi"
+	"github.com/dueldanov/lockbox/v2/components/snapshot"
+	"github.com/dueldanov/lockbox/v2/components/tangle"
+	"github.com/dueldanov/lockbox/v2/components/urts"
+	"github.com/dueldanov/lockbox/v2/components/warpsync"
+	"github.com/dueldanov/lockbox/v2/pkg/toolset"
 )
 
 var (
@@ -70,7 +70,7 @@ Command line flags:
 			inx.Component,
 			dashboard_metrics.Component,
 			debug.Component,
-			lockbox.Component,
+			// lockbox.Component, // TODO: Fix import cycles
 		),
 	)
 }

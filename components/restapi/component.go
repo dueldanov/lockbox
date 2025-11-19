@@ -14,11 +14,11 @@ import (
 
 	"github.com/iotaledger/hive.go/app"
 	"github.com/iotaledger/hive.go/runtime/event"
-	"github.com/iotaledger/hornet/v2/pkg/components"
-	"github.com/iotaledger/hornet/v2/pkg/daemon"
-	"github.com/iotaledger/hornet/v2/pkg/jwt"
-	"github.com/iotaledger/hornet/v2/pkg/metrics"
-	"github.com/iotaledger/hornet/v2/pkg/tangle"
+	"github.com/dueldanov/lockbox/v2/pkg/components"
+	"github.com/dueldanov/lockbox/v2/pkg/daemon"
+	"github.com/dueldanov/lockbox/v2/pkg/jwt"
+	"github.com/dueldanov/lockbox/v2/pkg/metrics"
+	"github.com/dueldanov/lockbox/v2/pkg/tangle"
 	"github.com/iotaledger/inx-app/pkg/httpserver"
 )
 

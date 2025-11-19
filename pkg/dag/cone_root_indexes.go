@@ -6,8 +6,8 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/iotaledger/lockbox/v2/pkg/common"
-	"github.com/iotaledger/lockbox/v2/pkg/model/storage"
+	"github.com/dueldanov/lockbox/v2/pkg/common"
+	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

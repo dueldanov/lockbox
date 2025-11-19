@@ -16,8 +16,8 @@ import (
 	"github.com/iotaledger/hive.go/logger"
 	"github.com/iotaledger/hive.go/runtime/event"
 	"github.com/iotaledger/hive.go/runtime/workerpool"
-	"github.com/iotaledger/hornet/v2/pkg/metrics"
-	"github.com/iotaledger/hornet/v2/pkg/p2p"
+	"github.com/dueldanov/lockbox/v2/pkg/metrics"
+	"github.com/dueldanov/lockbox/v2/pkg/p2p"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

@@ -9,10 +9,10 @@ import (
 
 	"github.com/iotaledger/hive.go/logger"
 	"github.com/iotaledger/hive.go/runtime/syncutils"
-	"github.com/iotaledger/hornet/v2/pkg/common"
-	storagepkg "github.com/iotaledger/hornet/v2/pkg/model/storage"
-	"github.com/iotaledger/hornet/v2/pkg/model/syncmanager"
-	"github.com/iotaledger/hornet/v2/pkg/model/utxo"
+	"github.com/dueldanov/lockbox/v2/pkg/common"
+	storagepkg "github.com/dueldanov/lockbox/v2/pkg/model/storage"
+	"github.com/dueldanov/lockbox/v2/pkg/model/syncmanager"
+	"github.com/dueldanov/lockbox/v2/pkg/model/utxo"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

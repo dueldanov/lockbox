@@ -8,7 +8,7 @@ import (
 	"github.com/multiformats/go-multiaddr"
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotaledger/hornet/v2/pkg/p2p/autopeering"
+	"github.com/dueldanov/lockbox/v2/pkg/p2p/autopeering"
 )
 
 func TestMultiAddrAutopeeringProtocol(t *testing.T) {

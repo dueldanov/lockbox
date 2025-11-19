@@ -6,10 +6,10 @@ import (
 	"go.uber.org/dig"
 
 	"github.com/iotaledger/hive.go/app"
-	"github.com/iotaledger/hornet/v2/pkg/components"
-	"github.com/iotaledger/hornet/v2/pkg/model/migrator"
-	"github.com/iotaledger/hornet/v2/pkg/model/utxo"
-	"github.com/iotaledger/hornet/v2/pkg/tangle"
+	"github.com/dueldanov/lockbox/v2/pkg/components"
+	"github.com/dueldanov/lockbox/v2/pkg/model/migrator"
+	"github.com/dueldanov/lockbox/v2/pkg/model/utxo"
+	"github.com/dueldanov/lockbox/v2/pkg/tangle"
 	"github.com/iotaledger/iota.go/api"
 	iotago "github.com/iotaledger/iota.go/v3"
 )

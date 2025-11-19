@@ -6,7 +6,7 @@ import (
 
 	"github.com/iotaledger/hive.go/objectstorage"
 	"github.com/iotaledger/hive.go/runtime/syncutils"
-	"github.com/iotaledger/hornet/v2/pkg/model/storage"
+	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
 )
 
 // WorkUnitState defines the state which a WorkUnit is in.

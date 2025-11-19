@@ -11,10 +11,10 @@ import (
     "google.golang.org/grpc/keepalive"
     
     "github.com/iotaledger/hive.go/logger"
-    "github.com/iotaledger/lockbox/v2/lockbox/b2b/api"
-    "github.com/iotaledger/lockbox/v2/lockbox/lockscript"
-    "github.com/iotaledger/lockbox/v2/lockbox/tiering"
-    "github.com/iotaledger/lockbox/v2/lockbox/vault"
+    "github.com/dueldanov/lockbox/v2/internal/b2b/api"
+    "github.com/dueldanov/lockbox/v2/internal/lockscript"
+    "github.com/dueldanov/lockbox/v2/internal/tiering"
+    "github.com/dueldanov/lockbox/v2/internal/vault"
 )
 
 // Server implements the B2B gRPC API

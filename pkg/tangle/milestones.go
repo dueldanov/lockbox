@@ -1,8 +1,8 @@
 package tangle
 
 import (
-	"github.com/iotaledger/hornet/v2/pkg/common"
-	"github.com/iotaledger/hornet/v2/pkg/model/storage"
+	"github.com/dueldanov/lockbox/v2/pkg/common"
+	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
 )
 
 func (t *Tangle) processValidMilestone(cachedMilestone *storage.CachedMilestone, requested bool) {

@@ -3,11 +3,11 @@ package coreapi
 import (
 	"encoding/json"
 
-	"github.com/iotaledger/hornet/v2/components/protocfg"
-	"github.com/iotaledger/hornet/v2/pkg/model/storage"
-	"github.com/iotaledger/hornet/v2/pkg/model/utxo"
-	"github.com/iotaledger/hornet/v2/pkg/protocol"
-	"github.com/iotaledger/hornet/v2/pkg/protocol/gossip"
+	"github.com/dueldanov/lockbox/v2/components/protocfg"
+	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
+	"github.com/dueldanov/lockbox/v2/pkg/model/utxo"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol/gossip"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

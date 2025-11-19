@@ -18,8 +18,8 @@ import (
 	"github.com/iotaledger/hive.go/app/configuration"
 	hivep2p "github.com/iotaledger/hive.go/crypto/p2p"
 	hivedb "github.com/iotaledger/hive.go/kvstore/database"
-	"github.com/iotaledger/hornet/v2/pkg/daemon"
-	"github.com/iotaledger/hornet/v2/pkg/p2p"
+	"github.com/dueldanov/lockbox/v2/pkg/daemon"
+	"github.com/dueldanov/lockbox/v2/pkg/p2p"
 )
 
 func init() {

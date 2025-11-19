@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/iotaledger/hornet/v2/pkg/dag"
-	"github.com/iotaledger/hornet/v2/pkg/metrics"
-	"github.com/iotaledger/hornet/v2/pkg/model/storage"
-	"github.com/iotaledger/hornet/v2/pkg/model/utxo"
+	"github.com/dueldanov/lockbox/v2/pkg/dag"
+	"github.com/dueldanov/lockbox/v2/pkg/metrics"
+	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
+	"github.com/dueldanov/lockbox/v2/pkg/model/utxo"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

@@ -3,8 +3,8 @@ package database
 import (
 	hivedb "github.com/iotaledger/hive.go/kvstore/database"
 	"github.com/iotaledger/hive.go/kvstore/rocksdb"
-	"github.com/iotaledger/hornet/v2/pkg/database"
-	"github.com/iotaledger/hornet/v2/pkg/metrics"
+	"github.com/dueldanov/lockbox/v2/pkg/database"
+	"github.com/dueldanov/lockbox/v2/pkg/metrics"
 )
 
 func newRocksDB(path string, metrics *metrics.DatabaseMetrics) *database.Database {

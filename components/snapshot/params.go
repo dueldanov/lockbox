@@ -2,7 +2,7 @@ package snapshot
 
 import (
 	"github.com/iotaledger/hive.go/app"
-	"github.com/iotaledger/hornet/v2/pkg/snapshot"
+	"github.com/dueldanov/lockbox/v2/pkg/snapshot"
 )
 
 // ParametersSnapshots contains the definition of the parameters used by snapshots.

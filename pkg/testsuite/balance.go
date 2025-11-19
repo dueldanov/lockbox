@@ -1,7 +1,7 @@
 package testsuite
 
 import (
-	"github.com/iotaledger/hornet/v2/pkg/model/utxo"
+	"github.com/dueldanov/lockbox/v2/pkg/model/utxo"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

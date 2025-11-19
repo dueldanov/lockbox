@@ -10,10 +10,10 @@ import (
 
 	"github.com/iotaledger/hive.go/app/configuration"
 	hivedb "github.com/iotaledger/hive.go/kvstore/database"
-	coreDatabase "github.com/iotaledger/hornet/v2/components/database"
-	"github.com/iotaledger/hornet/v2/pkg/database"
-	"github.com/iotaledger/hornet/v2/pkg/model/storage"
-	"github.com/iotaledger/hornet/v2/pkg/snapshot"
+	coreDatabase "github.com/dueldanov/lockbox/v2/components/database"
+	"github.com/dueldanov/lockbox/v2/pkg/database"
+	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
+	"github.com/dueldanov/lockbox/v2/pkg/snapshot"
 )
 
 func snapshotHash(args []string) error {

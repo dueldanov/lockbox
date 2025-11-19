@@ -1,6 +1,6 @@
 package testsuite
 
-import "github.com/iotaledger/hornet/v2/pkg/profile"
+import "github.com/dueldanov/lockbox/v2/pkg/profile"
 
 var TestProfileCaches = &profile.Caches{
 	Addresses: &profile.CacheOpts{

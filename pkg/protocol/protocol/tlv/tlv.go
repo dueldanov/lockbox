@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/iotaledger/hornet/v2/pkg/protocol/protocol/message"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol/protocol/message"
 )
 
 var (

@@ -7,8 +7,8 @@ import (
     
     "github.com/iotaledger/hive.go/logger"
     "github.com/iotaledger/hive.go/runtime/event"
-    "github.com/iotaledger/lockbox/v2/pkg/model/storage"
-    "github.com/iotaledger/lockbox/v2/pkg/protocol"
+    "github.com/dueldanov/lockbox/v2/pkg/model/storage"
+    "github.com/dueldanov/lockbox/v2/pkg/protocol"
     iotago "github.com/iotaledger/iota.go/v3"
 )
 

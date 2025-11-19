@@ -5,8 +5,8 @@ import (
 
 	"github.com/iotaledger/hive.go/runtime/event"
 	"github.com/iotaledger/hive.go/serializer/v2/byteutils"
-	"github.com/iotaledger/hornet/v2/pkg/protocol/protocol/message"
-	"github.com/iotaledger/hornet/v2/pkg/protocol/protocol/tlv"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol/protocol/message"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol/protocol/tlv"
 )
 
 // Protocol encapsulates the logic of parsing and sending protocol messages.

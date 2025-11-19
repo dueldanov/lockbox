@@ -7,7 +7,7 @@ import (
 	flag "github.com/spf13/pflag"
 
 	"github.com/iotaledger/hive.go/app/configuration"
-	"github.com/iotaledger/hornet/v2/pkg/snapshot"
+	"github.com/dueldanov/lockbox/v2/pkg/snapshot"
 )
 
 func snapshotInfo(args []string) error {

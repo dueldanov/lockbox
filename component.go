@@ -4,12 +4,12 @@ import (
     "go.uber.org/dig"
     
     "github.com/iotaledger/hive.go/app"
-    "github.com/iotaledger/lockbox/v2/lockbox/b2b"
-    "github.com/iotaledger/lockbox/v2/lockbox/consensus"
-    "github.com/iotaledger/lockbox/v2/lockbox/lockscript"
-    "github.com/iotaledger/lockbox/v2/lockbox/tiering"
-    "github.com/iotaledger/lockbox/v2/lockbox/vault"
-    "github.com/iotaledger/lockbox/v2/pkg/daemon"
+    "github.com/dueldanov/lockbox/v2/internal/b2b"
+    "github.com/dueldanov/lockbox/v2/internal/consensus"
+    "github.com/dueldanov/lockbox/v2/internal/lockscript"
+    "github.com/dueldanov/lockbox/v2/internal/tiering"
+    "github.com/dueldanov/lockbox/v2/internal/vault"
+    "github.com/dueldanov/lockbox/v2/pkg/daemon"
 )
 
 func init() {

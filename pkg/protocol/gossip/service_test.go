@@ -19,9 +19,9 @@ import (
 	appLogger "github.com/iotaledger/hive.go/app/logger"
 	hivep2p "github.com/iotaledger/hive.go/crypto/p2p"
 	"github.com/iotaledger/hive.go/logger"
-	"github.com/iotaledger/hornet/v2/pkg/metrics"
-	"github.com/iotaledger/hornet/v2/pkg/p2p"
-	"github.com/iotaledger/hornet/v2/pkg/protocol/gossip"
+	"github.com/dueldanov/lockbox/v2/pkg/metrics"
+	"github.com/dueldanov/lockbox/v2/pkg/p2p"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol/gossip"
 )
 
 const protocolID = "/iota/abcdf/1.0.0"

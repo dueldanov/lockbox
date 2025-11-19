@@ -9,7 +9,7 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/iotaledger/hive.go/runtime/contextutils"
-	"github.com/iotaledger/hornet/v2/pkg/common"
+	"github.com/dueldanov/lockbox/v2/pkg/common"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

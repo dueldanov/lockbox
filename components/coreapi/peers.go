@@ -7,9 +7,9 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/iotaledger/hive.go/logger"
-	"github.com/iotaledger/hornet/v2/pkg/p2p"
-	"github.com/iotaledger/hornet/v2/pkg/protocol/gossip"
-	"github.com/iotaledger/hornet/v2/pkg/restapi"
+	"github.com/dueldanov/lockbox/v2/pkg/p2p"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol/gossip"
+	"github.com/dueldanov/lockbox/v2/pkg/restapi"
 	"github.com/iotaledger/inx-app/pkg/httpserver"
 )
 

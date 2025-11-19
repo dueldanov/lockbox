@@ -9,7 +9,7 @@ import (
 
 	"github.com/iotaledger/hive.go/app"
 	"github.com/iotaledger/hive.go/app/configuration"
-	"github.com/iotaledger/hornet/v2/pkg/profile"
+	"github.com/dueldanov/lockbox/v2/pkg/profile"
 )
 
 const (

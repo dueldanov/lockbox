@@ -11,7 +11,7 @@ import (
 	kvstoreds "github.com/iotaledger/go-ds-kvstore"
 	"github.com/iotaledger/hive.go/kvstore"
 	hivedb "github.com/iotaledger/hive.go/kvstore/database"
-	"github.com/iotaledger/hornet/v2/pkg/database"
+	"github.com/dueldanov/lockbox/v2/pkg/database"
 )
 
 const (

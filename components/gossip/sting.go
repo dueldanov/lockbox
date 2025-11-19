@@ -8,7 +8,7 @@ import (
 
 	"github.com/iotaledger/hive.go/ds/shrinkingmap"
 	"github.com/iotaledger/hive.go/lo"
-	"github.com/iotaledger/hornet/v2/pkg/protocol/gossip"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol/gossip"
 )
 
 var (
