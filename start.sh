@@ -20,17 +20,21 @@ if [ ! -f "lockbox_devnet_snapshots/full_snapshot.bin" ]; then
     echo "✅ Snapshot created successfully!"
 fi
 
-# Check if database is locked
-if [ -f "lockbox_devnet_db/tangle/LOCK" ]; then
-    echo "⚠️  Database appears to be locked. Checking for running processes..."
+# Check if database is locked or corrupted
+if [ -d "lockbox_devnet_db" ]; then
     if pgrep -f "lockbox-node" > /dev/null; then
         echo "❌ LockBox Node is already running!"
         echo "   Use './stop.sh' to stop it first."
         exit 1
-    else
-        echo "⚠️  Stale lock file detected. Removing..."
-        rm -f lockbox_devnet_db/tangle/LOCK
-        rm -f lockbox_devnet_db/utxo/LOCK
+    fi
+
+    # Check for lock files (indicates improper shutdown)
+    if [ -f "lockbox_devnet_db/tangle/LOCK" ] || [ -f "lockbox_devnet_db/utxo/LOCK" ]; then
+        echo "⚠️  Database was not shut down properly!"
+        echo "   Removing corrupted database..."
+        rm -rf lockbox_devnet_db/
+        rm -rf lockbox_devnet_p2pstore/
+        echo "✅ Database cleaned. Will create fresh database on startup."
     fi
 fi
 

@@ -21,18 +21,25 @@ dist/
 # OSX related files
 .DS_Store
 /hornet
+/lockbox-node
 
 # Database directory
 mainnet*/
 p2pstore*/
 testnet*/
 shimmer*/
+lockbox_devnet_db/
+lockbox_devnet_p2pstore/
+lockbox_devnet_snapshots/
 
 # snapshot dir
 snapshots/
 
 # log files
 hornet.log
+lockbox.log
+startup.log
+shutdown.log
 integration-tests/logs/*.log
 integration-tests/logs/*.html
 integration-tests/logs/*.profile
