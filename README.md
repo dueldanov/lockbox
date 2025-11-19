@@ -16,12 +16,20 @@ It is a powerful fullnode software written in Go, optimized for private devnet d
 git clone https://github.com/dueldanov/lockbox.git
 cd lockbox
 
-# Build the binary
+# Build the binary (recommended - handles macOS code signing automatically)
+./build.sh
+
+# Or build manually
 go build -o lockbox-node
 ```
 
 **Build time:** ~30-60 seconds
 **Binary size:** ~44MB
+
+> **macOS Users:** The build script automatically code-signs the binary using ad-hoc signing. This is required for the executable to run properly on macOS. If you build manually with `go build`, you must sign it yourself:
+> ```bash
+> codesign --force --deep --sign - ./lockbox-node
+> ```
 
 📖 **See [BUILD.md](BUILD.md) or [СБОРКА_И_ЗАПУСК.md](СБОРКА_И_ЗАПУСК.md) (Russian) for detailed build instructions.**
 
@@ -93,6 +101,31 @@ This fork includes:
 - LockBox branding in logs and CLI
 
 All protocol logic, consensus mechanisms, and tangle internals remain unchanged from HORNET v2.0.2.
+
+---
+
+## Troubleshooting
+
+### macOS: Node hangs without output
+
+**Symptom:** Running `./lockbox-node` or `./start.sh` hangs indefinitely with no output or error messages.
+
+**Cause:** On macOS, unsigned executables may fail to run properly due to Gatekeeper security policies.
+
+**Solution:** Code-sign the binary using ad-hoc signing:
+
+```bash
+codesign --force --deep --sign - ./lockbox-node
+```
+
+This is automatically handled by `./build.sh`, but if you built manually with `go build` or downloaded a pre-built binary, you'll need to sign it yourself.
+
+**Verification:** After signing, test with:
+```bash
+./lockbox-node --help
+```
+
+If it displays help text, the binary is properly signed and ready to use.
 
 ---
 
