@@ -16,15 +16,14 @@ It is a powerful fullnode software written in Go, optimized for private devnet d
 git clone https://github.com/dueldanov/lockbox.git
 cd lockbox
 
-# Install dependencies
-go mod tidy
-
 # Build the binary
 go build -o lockbox-node
-
-# Or use the build script
-./scripts/build_hornet.sh
 ```
+
+**Build time:** ~30-60 seconds
+**Binary size:** ~44MB
+
+📖 **See [BUILD.md](BUILD.md) or [СБОРКА_И_ЗАПУСК.md](СБОРКА_И_ЗАПУСК.md) (Russian) for detailed build instructions.**
 
 ### 🚀 Running a Devnet Node (Easy Way)
 
