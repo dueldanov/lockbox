@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package lockbox;
 
-option go_package = "github.com/iotaledger/lockbox/v2/pkg/lockbox/proto";
+option go_package = "github.com/dueldanov/lockbox/v2/internal/proto";
 
 service LockBoxService {
   rpc LockAsset(LockAssetRequest) returns (LockAssetResponse);

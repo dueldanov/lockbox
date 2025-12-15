@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net"
 	"time"
@@ -12,7 +11,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
-	
+
 	pb "github.com/dueldanov/lockbox/v2/internal/proto"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
@@ -82,8 +81,8 @@ func (s *GRPCServer) Stop() {
 
 // LockAsset implements the gRPC method
 func (s *GRPCServer) LockAsset(ctx context.Context, req *pb.LockAssetRequest) (*pb.LockAssetResponse, error) {
-	// Parse owner address
-	ownerAddr, err := iotago.ParseBech32(req.OwnerAddress)
+	// Parse owner address (ParseBech32 returns: hrp, address, error)
+	_, ownerAddr, err := iotago.ParseBech32(req.OwnerAddress)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid owner address: %v", err)
 	}
@@ -98,7 +97,7 @@ func (s *GRPCServer) LockAsset(ctx context.Context, req *pb.LockAssetRequest) (*
 	// Parse multi-sig addresses if provided
 	var multiSigAddresses []iotago.Address
 	for _, addrStr := range req.MultiSigAddresses {
-		addr, err := iotago.ParseBech32(addrStr)
+		_, addr, err := iotago.ParseBech32(addrStr)
 		if err != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "invalid multi-sig address: %v", err)
 		}
@@ -126,37 +125,43 @@ func (s *GRPCServer) LockAsset(ctx context.Context, req *pb.LockAssetRequest) (*
 		AssetId:    resp.AssetID,
 		LockTime:   resp.LockTime.Unix(),
 		UnlockTime: resp.UnlockTime.Unix(),
-		Status:     resp.Status,
+		Status:     string(resp.Status),
 	}, nil
 }
 
 // UnlockAsset implements the gRPC method
 func (s *GRPCServer) UnlockAsset(ctx context.Context, req *pb.UnlockAssetRequest) (*pb.UnlockAssetResponse, error) {
+	// Convert UnlockParams from map[string]string to map[string]interface{}
+	unlockParams := make(map[string]interface{})
+	for k, v := range req.UnlockParams {
+		unlockParams[k] = v
+	}
+
 	// Create service request
 	serviceReq := &UnlockAssetRequest{
 		AssetID:      req.AssetId,
 		Signatures:   req.Signatures,
-		UnlockParams: req.UnlockParams,
+		UnlockParams: unlockParams,
 	}
-	
+
 	// Call service
 	resp, err := s.service.UnlockAsset(ctx, serviceReq)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to unlock asset: %v", err)
 	}
-	
+
 	// Convert response
 	return &pb.UnlockAssetResponse{
 		AssetId:    resp.AssetID,
 		OutputId:   resp.OutputID[:],
 		UnlockTime: resp.UnlockTime.Unix(),
-		Status:     resp.Status,
+		Status:     string(resp.Status),
 	}, nil
 }
 
 // GetAssetStatus implements the gRPC method
 func (s *GRPCServer) GetAssetStatus(ctx context.Context, req *pb.GetAssetStatusRequest) (*pb.GetAssetStatusResponse, error) {
-	asset, err := s.service.GetAssetStatus(ctx, req.AssetId)
+	asset, err := s.service.GetAssetStatus(req.AssetId)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "asset not found: %v", err)
 	}
@@ -176,7 +181,7 @@ func (s *GRPCServer) ListAssets(req *pb.ListAssetsRequest, stream pb.LockBoxServ
 	// Parse owner address if provided
 	var ownerAddr iotago.Address
 	if req.OwnerAddress != "" {
-		addr, err := iotago.ParseBech32(req.OwnerAddress)
+		_, addr, err := iotago.ParseBech32(req.OwnerAddress)
 		if err != nil {
 			return status.Errorf(codes.InvalidArgument, "invalid owner address: %v", err)
 		}
@@ -184,7 +189,7 @@ func (s *GRPCServer) ListAssets(req *pb.ListAssetsRequest, stream pb.LockBoxServ
 	}
 	
 	// Get assets from service
-	assets, err := s.service.ListAssets(stream.Context(), ownerAddr, AssetStatus(req.Status))
+	assets, err := s.service.ListAssets(ownerAddr, AssetStatus(req.Status))
 	if err != nil {
 		return status.Errorf(codes.Internal, "failed to list assets: %v", err)
 	}
@@ -212,40 +217,28 @@ func (s *GRPCServer) ListAssets(req *pb.ListAssetsRequest, stream pb.LockBoxServ
 }
 
 // CreateMultiSig implements the gRPC method
+// TODO: Implement in Phase 3 when CreateMultiSig is added to Service
 func (s *GRPCServer) CreateMultiSig(ctx context.Context, req *pb.CreateMultiSigRequest) (*pb.CreateMultiSigResponse, error) {
-	// Parse addresses
-	var addresses []iotago.Address
-	for _, addrStr := range req.Addresses {
-		addr, err := iotago.ParseBech32(addrStr)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid address: %v", err)
-		}
-		addresses = append(addresses, addr)
-	}
-	
-	// Create multi-sig configuration
-	config, err := s.service.CreateMultiSig(ctx, addresses, int(req.MinSignatures))
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create multi-sig: %v", err)
-	}
-	
-	return &pb.CreateMultiSigResponse{
-		MultiSigId: config.ID,
-		Address:    "", // TODO: Generate multi-sig address
-	}, nil
+	return nil, status.Error(codes.Unimplemented, "CreateMultiSig not yet implemented")
 }
 
 // EmergencyUnlock implements the gRPC method
 func (s *GRPCServer) EmergencyUnlock(ctx context.Context, req *pb.EmergencyUnlockRequest) (*pb.EmergencyUnlockResponse, error) {
-	resp, err := s.service.EmergencyUnlock(ctx, req.AssetId, req.Reason, req.EmergencySignatures)
+	err := s.service.EmergencyUnlock(req.AssetId, req.EmergencySignatures, req.Reason)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to emergency unlock: %v", err)
 	}
-	
+
+	// Get updated asset status
+	asset, err := s.service.GetAssetStatus(req.AssetId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get asset status: %v", err)
+	}
+
 	return &pb.EmergencyUnlockResponse{
-		AssetId:    resp.AssetID,
-		Status:     resp.Status,
-		UnlockTime: resp.UnlockTime.Unix(),
+		AssetId:    asset.ID,
+		Status:     string(asset.Status),
+		UnlockTime: asset.UnlockTime.Unix(),
 	}, nil
 }
 
