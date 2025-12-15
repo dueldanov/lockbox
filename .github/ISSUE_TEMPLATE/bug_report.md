@@ -27,8 +27,8 @@ A clear and concise description of what you expected to happen.
  - RAM: [e.g. 4 GB]
  - Cores: [e.g. 4 Cores]
  - Type: [e.g. Raspberry Pi 3B+, VPS, ...]
- - Browser [e.g. chrome, safari] (e.g. for HORNET Dashboard issues)
- - HORNET version [e.g. 0.2.1]
+ - Browser [e.g. chrome, safari] (e.g. for LockBox Dashboard issues)
+ - LockBox version [e.g. 2.0.2]
 
 **Additional context**
-Add any other context about the problem here [e.g. HORNET logs, errors, screenshots]
+Add any other context about the problem here [e.g. LockBox logs, errors, screenshots]

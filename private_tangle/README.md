@@ -10,7 +10,7 @@ are:
 ## Steps
 
 1. `./bootstrap.sh` this will bootstrap your own private tangle by creating the genesis snapshot and required files.
-   - _**Note:** If you are running this from inside the repository, you should run `./bootstrap.sh build` to re-build the docker images after any updates to the HORNET codebase (e.g. changing files or pulling git changes)_ 
+   - _**Note:** If you are running this from inside the repository, you should run `./bootstrap.sh build` to re-build the docker images after any updates to the LockBox codebase (e.g. changing files or pulling git changes)_ 
 2. Run:
    - `./run.sh` to run 2 nodes + COO.
    - `./run.sh 3` to run 3 nodes + COO.
@@ -23,28 +23,28 @@ The nodes will then be reachable under these ports:
 - inx-faucet:
     - Faucet: http://localhost:8091
     - pprof: http://localhost:6024/debug/pprof
-- Hornet-1:
+- LockBox-1:
     - API: http://localhost:14265
     - External Peering: 15611/tcp
     - Dashboard: http://localhost:8011 (username: admin, password: admin)
     - Prometheus: http://localhost:9311/metrics
     - pprof: http://localhost:6011/debug/pprof
     - inx: localhost:9011
-- Hornet-2:
+- LockBox-2:
     - API: http://localhost:14266
     - External Peering: 15612/tcp
     - Dashboard: http://localhost:8012 (username: admin, password: admin)
     - Prometheus: http://localhost:9312/metrics
     - pprof: http://localhost:6012/debug/pprof
     - inx: localhost:9012
-- Hornet-3:
+- LockBox-3:
     - API: http://localhost:14267
     - External Peering: 15613/tcp
     - Dashboard: http://localhost:8013 (username: admin, password: admin)
     - Prometheus: http://localhost:9313/metrics
     - pprof: http://localhost:6013/debug/pprof
     - inx: localhost:9013
-- Hornet-4:
+- LockBox-4:
     - API: http://localhost:14268
     - External Peering: 15614/tcp
     - Dashboard: http://localhost:8014 (username: admin, password: admin)

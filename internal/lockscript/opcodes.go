@@ -1,5 +1,10 @@
 package lockscript
 
+import "fmt"
+
+// Suppress unused import warning
+var _ = fmt.Errorf
+
 // OpCode represents a bytecode operation
 type OpCode byte
 

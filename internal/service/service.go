@@ -6,14 +6,19 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/dueldanov/lockbox/v2/internal/crypto"
+	"github.com/dueldanov/lockbox/v2/internal/verification"
 	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
 	"github.com/dueldanov/lockbox/v2/pkg/model/syncmanager"
 	"github.com/dueldanov/lockbox/v2/pkg/model/utxo"
 	"github.com/dueldanov/lockbox/v2/pkg/protocol"
+	"github.com/iotaledger/hive.go/logger"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 
@@ -25,51 +30,69 @@ var (
 )
 
 type Service struct {
+	*logger.WrappedLogger
+
 	storage          *storage.Storage
 	utxoManager      *utxo.Manager
 	syncManager      *syncmanager.SyncManager
 	protocolManager  *protocol.Manager
-	config           *lockbox.ServiceConfig
-	storageManager   *lockbox.StorageManager
-	
+	config           *ServiceConfig
+	storageManager   *StorageManager
+
 	// Cryptography components
 	shardEncryptor   *crypto.ShardEncryptor
 	zkpManager       *crypto.ZKPManager
-	
+
+	// Verification components
+	verifier         *verification.Verifier
+	nodeSelector     *verification.NodeSelector
+	tokenManager     *verification.TokenManager
+	retryManager     *verification.RetryManager
+
 	// Caches and state
-	lockedAssets     map[string]*lockbox.LockedAsset
+	lockedAssets     map[string]*LockedAsset
 	pendingUnlocks   map[string]time.Time
 	mu               sync.RWMutex
 	scriptCompiler   interface{} // Will be initialized in InitializeCompiler
 }
 
 func NewService(
+	log *logger.Logger,
 	storage *storage.Storage,
 	utxoManager *utxo.Manager,
 	syncManager *syncmanager.SyncManager,
 	protocolManager *protocol.Manager,
-	config *lockbox.ServiceConfig,
+	config *ServiceConfig,
 ) (*Service, error) {
-	storageManager, err := lockbox.NewStorageManager(storage.UTXOStore())
+	storageManager, err := NewStorageManager(storage.UTXOStore())
 	if err != nil {
 		return nil, err
 	}
 
-	// Generate master key for encryption
-	masterKey := make([]byte, 32)
-	if _, err := rand.Read(masterKey); err != nil {
-		return nil, fmt.Errorf("failed to generate master key: %w", err)
+	// Load or generate persistent master key
+	keyDir := filepath.Join(config.DataDir, "keys")
+	keyStore, err := crypto.NewKeyStore(keyDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize key store: %w", err)
 	}
+
+	masterKey, err := keyStore.LoadOrGenerate()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load master key: %w", err)
+	}
+	defer crypto.ClearBytes(masterKey) // Clear from memory after use
 
 	// Initialize cryptography components
 	shardEncryptor, err := crypto.NewShardEncryptor(masterKey, 4096) // 4KB shards
 	if err != nil {
+		crypto.ClearBytes(masterKey)
 		return nil, fmt.Errorf("failed to initialize shard encryptor: %w", err)
 	}
 
 	zkpManager := crypto.NewZKPManager()
 
 	return &Service{
+		WrappedLogger:   logger.NewWrappedLogger(log),
 		storage:         storage,
 		utxoManager:     utxoManager,
 		syncManager:     syncManager,
@@ -78,12 +101,12 @@ func NewService(
 		storageManager:  storageManager,
 		shardEncryptor:  shardEncryptor,
 		zkpManager:      zkpManager,
-		lockedAssets:    make(map[string]*lockbox.LockedAsset),
+		lockedAssets:    make(map[string]*LockedAsset),
 		pendingUnlocks:  make(map[string]time.Time),
 	}, nil
 }
 
-func (s *Service) LockAsset(ctx context.Context, req *lockbox.LockAssetRequest) (*lockbox.LockAssetResponse, error) {
+func (s *Service) LockAsset(ctx context.Context, req *LockAssetRequest) (*LockAssetResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -127,7 +150,7 @@ func (s *Service) LockAsset(ctx context.Context, req *lockbox.LockAssetRequest) 
 	}
 
 	// Create locked asset
-	asset := &lockbox.LockedAsset{
+	asset := &LockedAsset{
 		ID:                assetID,
 		OwnerAddress:      req.OwnerAddress,
 		OutputID:          req.OutputID,
@@ -136,7 +159,7 @@ func (s *Service) LockAsset(ctx context.Context, req *lockbox.LockAssetRequest) 
 		LockScript:        req.LockScript,
 		MultiSigAddresses: req.MultiSigAddresses,
 		MinSignatures:     req.MinSignatures,
-		Status:            lockbox.AssetStatusLocked,
+		Status:            AssetStatusLocked,
 		CreatedAt:         lockTime,
 		UpdatedAt:         lockTime,
 	}
@@ -153,15 +176,15 @@ func (s *Service) LockAsset(ctx context.Context, req *lockbox.LockAssetRequest) 
 
 	s.lockedAssets[assetID] = asset
 
-	return &lockbox.LockAssetResponse{
+	return &LockAssetResponse{
 		AssetID:    assetID,
 		LockTime:   lockTime,
 		UnlockTime: unlockTime,
-		Status:     lockbox.AssetStatusLocked,
+		Status:     AssetStatusLocked,
 	}, nil
 }
 
-func (s *Service) UnlockAsset(ctx context.Context, req *lockbox.UnlockAssetRequest) (*lockbox.UnlockAssetResponse, error) {
+func (s *Service) UnlockAsset(ctx context.Context, req *UnlockAssetRequest) (*UnlockAssetResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -213,7 +236,7 @@ func (s *Service) UnlockAsset(ctx context.Context, req *lockbox.UnlockAssetReque
 	timedClear.Schedule(req.AssetID, assetData, 1*time.Minute)
 
 	// Update asset status
-	asset.Status = lockbox.AssetStatusUnlocked
+	asset.Status = AssetStatusUnlocked
 	asset.UpdatedAt = time.Now()
 
 	if err := s.storageManager.StoreLockedAsset(asset); err != nil {
@@ -226,11 +249,11 @@ func (s *Service) UnlockAsset(ctx context.Context, req *lockbox.UnlockAssetReque
 		fmt.Printf("failed to cleanup encrypted shards: %v\n", err)
 	}
 
-	return &lockbox.UnlockAssetResponse{
+	return &UnlockAssetResponse{
 		AssetID:    asset.ID,
 		OutputID:   asset.OutputID,
 		UnlockTime: time.Now(),
-		Status:     lockbox.AssetStatusUnlocked,
+		Status:     AssetStatusUnlocked,
 	}, nil
 }
 
@@ -247,7 +270,7 @@ func (s *Service) ProcessMilestone(msIndex iotago.MilestoneIndex) error {
 				continue
 			}
 
-			asset.Status = lockbox.AssetStatusUnlocked
+			asset.Status = AssetStatusUnlocked
 			asset.UpdatedAt = now
 
 			if err := s.storageManager.StoreLockedAsset(asset); err != nil {
@@ -269,7 +292,7 @@ func (s *Service) ProcessPendingUnlocks() error {
 
 	now := time.Now()
 	for _, asset := range assets {
-		if asset.Status == lockbox.AssetStatusLocked && now.After(asset.UnlockTime) {
+		if asset.Status == AssetStatusLocked && now.After(asset.UnlockTime) {
 			s.mu.Lock()
 			s.pendingUnlocks[asset.ID] = asset.UnlockTime
 			s.mu.Unlock()
@@ -292,11 +315,11 @@ func (s *Service) generateAssetID() string {
 	return hex.EncodeToString(b)
 }
 
-func (s *Service) serializeAssetData(req *lockbox.LockAssetRequest) ([]byte, error) {
+func (s *Service) serializeAssetData(req *LockAssetRequest) ([]byte, error) {
 	// Simple serialization - in production use protobuf or similar
 	data := fmt.Sprintf("%s|%s|%s|%d",
 		req.OwnerAddress.String(),
-		req.OutputID.String(),
+		hex.EncodeToString(req.OutputID[:]),
 		req.LockScript,
 		req.MinSignatures,
 	)
@@ -363,9 +386,58 @@ func (s *Service) serializeShard(shard *crypto.CharacterShard) ([]byte, error) {
 }
 
 func (s *Service) deserializeShard(data []byte) (*crypto.CharacterShard, error) {
-	// Simple deserialization - in production use protobuf
-	// This is a placeholder implementation
-	return &crypto.CharacterShard{}, nil
+	// Parse pipe-delimited format: ID|Index|Total|Timestamp|DataHex|NonceHex|ChecksumHex
+	parts := strings.Split(string(data), "|")
+	if len(parts) != 7 {
+		return nil, fmt.Errorf("invalid shard format: expected 7 fields, got %d", len(parts))
+	}
+
+	// Parse numeric fields
+	id, err := strconv.ParseUint(parts[0], 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("invalid shard ID: %w", err)
+	}
+
+	index, err := strconv.ParseUint(parts[1], 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("invalid shard Index: %w", err)
+	}
+
+	total, err := strconv.ParseUint(parts[2], 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("invalid shard Total: %w", err)
+	}
+
+	timestamp, err := strconv.ParseInt(parts[3], 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid shard Timestamp: %w", err)
+	}
+
+	// Decode hex fields
+	shardData, err := hex.DecodeString(parts[4])
+	if err != nil {
+		return nil, fmt.Errorf("invalid shard Data hex: %w", err)
+	}
+
+	nonce, err := hex.DecodeString(parts[5])
+	if err != nil {
+		return nil, fmt.Errorf("invalid shard Nonce hex: %w", err)
+	}
+
+	checksum, err := hex.DecodeString(parts[6])
+	if err != nil {
+		return nil, fmt.Errorf("invalid shard Checksum hex: %w", err)
+	}
+
+	return &crypto.CharacterShard{
+		ID:        uint32(id),
+		Index:     uint32(index),
+		Total:     uint32(total),
+		Data:      shardData,
+		Nonce:     nonce,
+		Timestamp: timestamp,
+		Checksum:  checksum,
+	}, nil
 }
 
 func (s *Service) storeOwnershipProof(assetID string, proof *crypto.OwnershipProof) error {
@@ -380,10 +452,124 @@ func (s *Service) storeOwnershipProof(assetID string, proof *crypto.OwnershipPro
 
 func (s *Service) getOwnershipProof(assetID string) (*crypto.OwnershipProof, error) {
 	key := fmt.Sprintf("proof_%s", assetID)
-	_, err := s.storage.UTXOStore().Get([]byte(key))
+	data, err := s.storage.UTXOStore().Get([]byte(key))
 	if err != nil {
 		return nil, err
 	}
-	// Deserialize proof - placeholder
-	return &crypto.OwnershipProof{}, nil
+
+	// Parse pipe-delimited format: AssetCommitmentHex|OwnerAddressHex|Timestamp
+	parts := strings.Split(string(data), "|")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid proof format: expected 3 fields, got %d", len(parts))
+	}
+
+	// Decode hex fields
+	assetCommitment, err := hex.DecodeString(parts[0])
+	if err != nil {
+		return nil, fmt.Errorf("invalid AssetCommitment hex: %w", err)
+	}
+
+	ownerAddress, err := hex.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("invalid OwnerAddress hex: %w", err)
+	}
+
+	// Parse timestamp
+	timestamp, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Timestamp: %w", err)
+	}
+
+	return &crypto.OwnershipProof{
+		AssetCommitment: assetCommitment,
+		OwnerAddress:    ownerAddress,
+		Timestamp:       timestamp,
+		// Note: Proof field is not serialized in storeOwnershipProof()
+	}, nil
+}
+
+// GetAssetStatus retrieves the current status of an asset
+// Automatically updates status to Expired if unlock time has passed
+func (s *Service) GetAssetStatus(assetID string) (*LockedAsset, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	asset, err := s.storageManager.GetLockedAsset(assetID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Auto-update status to Expired if unlock time has passed
+	if asset.Status == AssetStatusLocked && time.Now().After(asset.UnlockTime) {
+		asset.Status = AssetStatusExpired
+		asset.UpdatedAt = time.Now()
+		if err := s.storageManager.StoreLockedAsset(asset); err != nil {
+			return nil, fmt.Errorf("failed to update expired status: %w", err)
+		}
+	}
+
+	return asset, nil
+}
+
+// ListAssets returns all assets matching the given filters
+// If owner is nil, returns assets for all owners
+// If statusFilter is empty, returns assets with any status
+func (s *Service) ListAssets(owner iotago.Address, statusFilter AssetStatus) ([]*LockedAsset, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	allAssets, err := s.storageManager.ListLockedAssets()
+	if err != nil {
+		return nil, err
+	}
+
+	var filtered []*LockedAsset
+	for _, asset := range allAssets {
+		// Filter by owner (if specified)
+		if owner != nil && !asset.OwnerAddress.Equal(owner) {
+			continue
+		}
+		// Filter by status (if specified)
+		if statusFilter != "" && asset.Status != statusFilter {
+			continue
+		}
+		filtered = append(filtered, asset)
+	}
+
+	return filtered, nil
+}
+
+// EmergencyUnlock initiates an emergency unlock for an asset
+// Requires multi-sig approval if configured, and applies delay from config
+func (s *Service) EmergencyUnlock(assetID string, signatures [][]byte, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	asset, err := s.storageManager.GetLockedAsset(assetID)
+	if err != nil {
+		return err
+	}
+
+	// Check if EmergencyUnlock is enabled for this tier
+	if !s.config.EnableEmergencyUnlock {
+		return fmt.Errorf("emergency unlock not enabled for this tier")
+	}
+
+	// Check multi-sig signatures if required
+	if len(asset.MultiSigAddresses) > 0 && asset.MinSignatures > 0 {
+		if len(signatures) < asset.MinSignatures {
+			return fmt.Errorf("insufficient signatures: need %d, got %d",
+				asset.MinSignatures, len(signatures))
+		}
+		// TODO: Verify each signature against MultiSigAddresses
+	}
+
+	// Apply delay from config (EmergencyDelayDays)
+	delayDuration := time.Duration(s.config.EmergencyDelayDays) * 24 * time.Hour
+	asset.UnlockTime = time.Now().Add(delayDuration)
+	asset.EmergencyUnlock = true
+	asset.Status = AssetStatusEmergency
+	asset.UpdatedAt = time.Now()
+
+	return s.storageManager.StoreLockedAsset(asset)
 }

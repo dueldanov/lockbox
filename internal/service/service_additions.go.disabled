@@ -2,10 +2,10 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"time"
 
-	"github.com/dueldanov/lockbox/v2/pkg/daemon"
 	"github.com/dueldanov/lockbox/v2/internal/verification"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
@@ -18,7 +18,7 @@ type ServiceAdditions struct {
 }
 
 func (s *Service) InitializeVerification() error {
-	s.nodeSelector = verification.NewNodeSelector(s.WrappedLogger.Logger)
+	s.nodeSelector = verification.NewNodeSelector(s.WrappedLogger.Logger())
 	for _, location := range s.config.NodeLocations {
 		node := &verification.VerificationNode{
 			ID:         fmt.Sprintf("node-%s-%d", location, time.Now().Unix()),
@@ -38,7 +38,7 @@ func (s *Service) InitializeVerification() error {
 	if s.config.Tier == TierElite {
 		rotationPeriod = 1 * time.Hour
 	}
-	s.tokenManager = verification.NewTokenManager(s.WrappedLogger.Logger, rotationPeriod, 7*24*time.Hour)
+	s.tokenManager = verification.NewTokenManager(s.WrappedLogger.Logger(), rotationPeriod, 7*24*time.Hour)
 	go s.tokenManager.Start(context.Background())
 
 	// Check if token initialization was successful

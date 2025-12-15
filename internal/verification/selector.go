@@ -3,13 +3,14 @@ package verification
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"sort"
 	"sync"
 	"time"
 
+	lockbox "github.com/dueldanov/lockbox/v2/internal/interfaces"
 	"github.com/iotaledger/hive.go/logger"
-	"github.com/dueldanov/lockbox/v2/internal/service"
 )
 
 // NodeSelector selects verification nodes based on tier requirements and geographic distribution

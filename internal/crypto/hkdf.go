@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -52,7 +53,8 @@ func NewHKDFManager(masterKey []byte) (*HKDFManager, error) {
 		return nil, fmt.Errorf("failed to generate salt: %w", err)
 	}
 
-	return &HKDFManager{
+	// Create manager with properly allocated key
+	manager := &HKDFManager{
 		masterKey: make([]byte, len(masterKey)),
 		salt:      salt,
 		derivedKeysPool: sync.Pool{
@@ -60,7 +62,12 @@ func NewHKDFManager(masterKey []byte) (*HKDFManager, error) {
 				return make([]byte, HKDFKeySize)
 			},
 		},
-	}, nil
+	}
+
+	// FIX: Actually copy the master key into the allocated slice
+	copy(manager.masterKey, masterKey)
+
+	return manager, nil
 }
 
 // DeriveKey derives a new key from the master key using HKDF

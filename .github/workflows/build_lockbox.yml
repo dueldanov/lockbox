@@ -1,4 +1,4 @@
-name: Build HORNET
+name: Build LockBox
 
 on:
   pull_request:
@@ -11,7 +11,7 @@ on:
 
 jobs:
   build:
-    name: Build HORNET
+    name: Build LockBox
     runs-on: self-hosted
     steps:
       - name: Check out code into the Go module directory
@@ -26,5 +26,5 @@ jobs:
       - name: Print Go version
         run: go version
 
-      - name: Build HORNET
+      - name: Build LockBox
         run: go build -v .

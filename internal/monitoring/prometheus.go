@@ -1,10 +1,11 @@
 package monitoring
 
 import (
-	"github.com/iotaledger/hive.go/logger"
+	"fmt"
+
 	"github.com/dueldanov/lockbox/v2/internal/verification"
+	"github.com/iotaledger/hive.go/logger"
 	"github.com/prometheus/client_golang/prometheus"
-	"time"
 )
 
 // PrometheusCollector integrates LockBox metrics with Prometheus for external monitoring

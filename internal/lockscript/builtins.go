@@ -140,17 +140,22 @@ func funcSHA256(args []interface{}) (interface{}, error) {
 }
 
 func funcVerifySig(args []interface{}) (interface{}, error) {
-    pubKey, ok1 := args[0].(string)
+    pubKeyHex, ok1 := args[0].(string)
     message, ok2 := args[1].(string)
-    signature, ok3 := args[2].(string)
-    
+    signatureHex, ok3 := args[2].(string)
+
     if !ok1 || !ok2 || !ok3 {
         return nil, fmt.Errorf("verify_sig: invalid arguments")
     }
-    
-    // Simplified signature verification
-    // In production, this would use proper cryptographic verification
-    return len(pubKey) > 0 && len(message) > 0 && len(signature) > 0, nil
+
+    // Ed25519 signature verification
+    verified, err := VerifyEd25519Signature(pubKeyHex, message, signatureHex)
+    if err != nil {
+        // Return false for invalid format rather than error
+        // This allows scripts to handle verification failures gracefully
+        return false, nil
+    }
+    return verified, nil
 }
 
 func funcRequireSigs(args []interface{}) (interface{}, error) {
@@ -233,21 +238,4 @@ func (e *Engine) LoadScript(script *CompiledScript) error {
     return nil
 }
 
-// Helper function for type conversion
-func toInt64(v interface{}) int64 {
-    switch val := v.(type) {
-    case int64:
-        return val
-    case int:
-        return int64(val)
-    case float64:
-        return int64(val)
-    case bool:
-        if val {
-            return 1
-        }
-        return 0
-    default:
-        return 0
-    }
-}
+// toInt64 is defined in ast.go to avoid redeclaration

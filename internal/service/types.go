@@ -48,6 +48,7 @@ const (
 // ServiceConfig holds the configuration for the LockBox service
 type ServiceConfig struct {
 	Tier                  Tier
+	DataDir               string        // Directory for persistent data storage (keys, state, etc.)
 	MinLockPeriod         time.Duration
 	MaxLockPeriod         time.Duration
 	MinHoldingsUSD        float64

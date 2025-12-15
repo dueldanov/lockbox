@@ -1,7 +1,6 @@
 package crypto
 
 import (
-	"crypto/cipher"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -10,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 

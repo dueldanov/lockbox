@@ -1,5 +1,14 @@
 package lockscript
 
+import (
+	"errors"
+	"fmt"
+)
+
+// Suppress unused import warnings
+var _ = errors.New
+var _ = fmt.Errorf
+
 // AST node types
 type ExpressionStatement struct {
 	Expression Expression

@@ -92,20 +92,20 @@ func (l *Lexer) nextToken() (Token, error) {
 		} else {
 			return Token{}, fmt.Errorf("unexpected character: %c", l.ch)
 		}
-	case '+', '-', '*', '/', '%', '(', ')', '{', '}', ',', ';':
+	case '+', '-', '*', '%', '(', ')', '{', '}', ',', ';':
 		token = Token{Type: TokenOperator, Value: string(l.ch)}
-	case '"':
-		str, err := l.readString()
-		if err != nil {
-			return Token{}, err
-		}
-		token = Token{Type: TokenString, Value: str}
 	case '/':
 		if l.peekChar() == '/' {
 			l.skipComment()
 			return l.nextToken()
 		}
 		token = Token{Type: TokenOperator, Value: "/"}
+	case '"':
+		str, err := l.readString()
+		if err != nil {
+			return Token{}, err
+		}
+		token = Token{Type: TokenString, Value: str}
 	default:
 		if isLetter(l.ch) {
 			ident := l.readIdentifier()

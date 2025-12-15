@@ -4,13 +4,12 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
 
+	lockbox "github.com/dueldanov/lockbox/v2/internal/interfaces"
 	"github.com/iotaledger/hive.go/logger"
-	"github.com/dueldanov/lockbox/v2/internal/service"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 

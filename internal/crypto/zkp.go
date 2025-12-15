@@ -2,14 +2,18 @@ package crypto
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash"
 	"math/big"
 	"sync"
 	"time"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend/groth16"
+	"github.com/consensys/gnark/constraint"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 	"github.com/consensys/gnark/std/hash/mimc"
@@ -186,8 +190,14 @@ func (z *ZKPManager) GenerateOwnershipProof(assetID []byte, ownerSecret []byte) 
 	witness.AssetCommitment = assetCommitment
 	witness.OwnerAddress = ownerAddress
 
+	// Convert to witness format
+	w, err := frontend.NewWitness(witness, z.curve.ScalarField())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create witness: %w", err)
+	}
+
 	// Generate proof
-	proof, err := groth16.Prove(z.compiledCircuits[circuitID].cs, pk, witness)
+	proof, err := groth16.Prove(z.compiledCircuits[circuitID].cs, pk, w)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrProofGenerationFailed, err)
 	}
@@ -213,13 +223,19 @@ func (z *ZKPManager) VerifyOwnershipProof(proof *OwnershipProof) error {
 	}
 
 	// Create public witness
-	publicWitness := &OwnershipProofCircuit{
+	publicWitnessCircuit := &OwnershipProofCircuit{
 		AssetCommitment: new(big.Int).SetBytes(proof.AssetCommitment),
 		OwnerAddress:    new(big.Int).SetBytes(proof.OwnerAddress),
 	}
 
+	// Convert to public witness format
+	publicWitness, err := frontend.NewWitness(publicWitnessCircuit, z.curve.ScalarField(), frontend.PublicOnly())
+	if err != nil {
+		return fmt.Errorf("failed to create public witness: %w", err)
+	}
+
 	// Verify proof
-	err := groth16.Verify(proof.Proof, vk, publicWitness)
+	err = groth16.Verify(proof.Proof, vk, publicWitness)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrProofVerificationFailed, err)
 	}
@@ -256,8 +272,14 @@ func (z *ZKPManager) GenerateUnlockProof(unlockSecret, assetID, additionalData [
 	unlockCommitment := calculateUnlockCommitment(unlockSecret, assetID, additionalData)
 	witness.UnlockCommitment = unlockCommitment
 
+	// Convert to witness format
+	w, err := frontend.NewWitness(witness, z.curve.ScalarField())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create witness: %w", err)
+	}
+
 	// Generate proof
-	proof, err := groth16.Prove(z.compiledCircuits[circuitID].cs, pk, witness)
+	proof, err := groth16.Prove(z.compiledCircuits[circuitID].cs, pk, w)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrProofGenerationFailed, err)
 	}
@@ -283,14 +305,20 @@ func (z *ZKPManager) VerifyUnlockProof(proof *UnlockProof) error {
 	}
 
 	// Create public witness
-	publicWitness := &UnlockConditionCircuit{
+	publicWitnessCircuit := &UnlockConditionCircuit{
 		UnlockCommitment: new(big.Int).SetBytes(proof.UnlockCommitment),
 		CurrentTime:      big.NewInt(proof.CurrentTime),
 		UnlockTime:       big.NewInt(proof.UnlockTime),
 	}
 
+	// Convert to public witness format
+	publicWitness, err := frontend.NewWitness(publicWitnessCircuit, z.curve.ScalarField(), frontend.PublicOnly())
+	if err != nil {
+		return fmt.Errorf("failed to create public witness: %w", err)
+	}
+
 	// Verify proof
-	err := groth16.Verify(proof.Proof, vk, publicWitness)
+	err = groth16.Verify(proof.Proof, vk, publicWitness)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrProofVerificationFailed, err)
 	}
@@ -350,35 +378,61 @@ type UnlockProof struct {
 
 // Helper functions
 
+// writeLengthPrefixed writes data with a length prefix to prevent ambiguity
+// This ensures that different combinations of inputs produce different hashes
+func writeLengthPrefixed(h hash.Hash, data []byte) {
+	length := make([]byte, 4)
+	binary.BigEndian.PutUint32(length, uint32(len(data)))
+	h.Write(length)
+	h.Write(data)
+}
+
+// calculateCommitment creates a cryptographic commitment to an asset using SHA256
+// Domain: "lockbox-commitment-v1"
+// This prevents length extension attacks and cross-protocol attacks
 func calculateCommitment(assetID, ownerSecret, nonce []byte) *big.Int {
-	// Simplified - use proper hash in production
-	h := make([]byte, 32)
-	copy(h, assetID)
-	for i := range ownerSecret {
-		h[i%32] ^= ownerSecret[i]
-	}
-	for i := range nonce {
-		h[i%32] ^= nonce[i]
-	}
-	return new(big.Int).SetBytes(h)
+	h := sha256.New()
+
+	// Domain separator to prevent cross-protocol attacks
+	h.Write([]byte("lockbox-commitment-v1"))
+
+	// Length-prefix inputs to prevent length extension attacks
+	writeLengthPrefixed(h, assetID)
+	writeLengthPrefixed(h, ownerSecret)
+	writeLengthPrefixed(h, nonce)
+
+	hash := h.Sum(nil)
+	return new(big.Int).SetBytes(hash)
 }
 
+// calculateAddress derives an address from a secret using SHA256
+// Domain: "lockbox-address-v1"
 func calculateAddress(secret []byte) *big.Int {
-	// Simplified - use proper derivation in production
-	h := make([]byte, 32)
-	copy(h, secret)
-	return new(big.Int).SetBytes(h)
+	h := sha256.New()
+
+	// Domain separator
+	h.Write([]byte("lockbox-address-v1"))
+
+	// Length-prefix input
+	writeLengthPrefixed(h, secret)
+
+	hash := h.Sum(nil)
+	return new(big.Int).SetBytes(hash)
 }
 
+// calculateUnlockCommitment creates a commitment for unlock verification using SHA256
+// Domain: "lockbox-unlock-v1"
 func calculateUnlockCommitment(unlockSecret, assetID, additionalData []byte) *big.Int {
-	// Simplified - use proper hash in production
-	h := make([]byte, 32)
-	copy(h, unlockSecret)
-	for i := range assetID {
-		h[i%32] ^= assetID[i]
-	}
-	for i := range additionalData {
-		h[i%32] ^= additionalData[i]
-	}
-	return new(big.Int).SetBytes(h)
+	h := sha256.New()
+
+	// Domain separator
+	h.Write([]byte("lockbox-unlock-v1"))
+
+	// Length-prefix inputs
+	writeLengthPrefixed(h, unlockSecret)
+	writeLengthPrefixed(h, assetID)
+	writeLengthPrefixed(h, additionalData)
+
+	hash := h.Sum(nil)
+	return new(big.Int).SetBytes(hash)
 }

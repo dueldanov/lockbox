@@ -161,27 +161,32 @@ func clearBytes(b []byte) {
 	if len(b) == 0 {
 		return
 	}
-	
+
 	// First pass: overwrite with random data
 	rand.Read(b)
-	
+
 	// Second pass: overwrite with zeros
 	for i := range b {
 		b[i] = 0
 	}
-	
+
 	// Third pass: overwrite with ones
 	for i := range b {
 		b[i] = 0xFF
 	}
-	
+
 	// Final pass: overwrite with zeros
 	for i := range b {
 		b[i] = 0
 	}
-	
+
 	// Force memory barrier
 	runtime.KeepAlive(b)
+}
+
+// ClearBytes is the exported version of clearBytes for use by other packages
+func ClearBytes(b []byte) {
+	clearBytes(b)
 }
 
 // Platform-specific memory locking functions

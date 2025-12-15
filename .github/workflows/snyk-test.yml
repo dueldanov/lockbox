@@ -19,8 +19,8 @@ jobs:
         with:
           ref: develop
 
-      - name: Build HORNET Docker image
-        run: docker build . --file Dockerfile --tag hornet:latest
+      - name: Build LockBox Docker image
+        run: docker build . --file Dockerfile --tag lockbox:latest
 
       - name: Run Snyk to check for Golang vulnerabilities
         uses: snyk/actions/golang@0.4.0
@@ -36,7 +36,7 @@ jobs:
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
-          image: hornet:latest
+          image: lockbox:latest
           # Exclude Go app vulns because those are picked up by the previous scan
           # For Docker scans, the SARIF is created by default
           args: --org=gohornet --file=Dockerfile --exclude-app-vulns

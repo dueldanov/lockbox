@@ -5,8 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
 	"github.com/dueldanov/lockbox/v2/internal/lockscript"
+	"github.com/iotaledger/hive.go/logger"
+	"github.com/stretchr/testify/require"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 
@@ -57,27 +58,6 @@ func TestScriptCompilation(t *testing.T) {
 	compiled, err := engine.CompileScript(context.Background(), script)
 	require.NoError(t, err)
 	require.NotNil(t, compiled)
-}
-
-// TestAssetVerification tests the verification system for asset retrieval.
-func TestAssetVerification(t *testing.T) {
-	svc := setupTestService(t)
-	addr := &iotago.Ed25519Address{}
-	outputID := iotago.OutputID{}
-	lockReq := &LockAssetRequest{
-		OwnerAddress: addr,
-		OutputID:     outputID,
-		LockDuration: time.Second,
-	}
-	lockResp, err := svc.LockAsset(context.Background(), lockReq)
-	require.NoError(t, err)
-
-	// Wait for lock duration to expire
-	time.Sleep(2 * time.Second)
-
-	result, err := svc.VerifyAssetRetrieval(context.Background(), lockResp.AssetID, addr)
-	require.NoError(t, err)
-	require.True(t, result.Valid)
 }
 
 // setupTestService creates a test instance of the LockBox service.

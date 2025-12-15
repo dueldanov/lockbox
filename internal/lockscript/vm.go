@@ -303,8 +303,16 @@ func (vm *VirtualMachine) equal(a, b interface{}) bool {
 	return false
 }
 
-func (vm *VirtualMachine) verifySignature(pubKey, message, signature string) bool {
-	// TODO: Implement actual signature verification
-	// This is a placeholder that should use ed25519 or similar
-	return len(pubKey) > 0 && len(message) > 0 && len(signature) > 0
+func (vm *VirtualMachine) verifySignature(pubKeyHex, message, signatureHex string) bool {
+	// Ed25519 signature verification
+	// pubKeyHex: hex-encoded 32-byte public key
+	// message: plaintext message that was signed
+	// signatureHex: hex-encoded 64-byte signature
+	verified, err := VerifyEd25519Signature(pubKeyHex, message, signatureHex)
+	if err != nil {
+		// Invalid format - return false instead of error
+		// This matches expected behavior in LockScript execution
+		return false
+	}
+	return verified
 }

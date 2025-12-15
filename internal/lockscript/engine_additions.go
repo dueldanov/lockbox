@@ -20,8 +20,6 @@ type ExecutionResult struct {
 
 // CompileNode compiles an AST node to bytecode
 func (c *Compiler) compileNode(node ASTNode) ([]byte, error) {
-    writer := NewBytecodeWriter()
-    
     switch n := node.(type) {
     case *IfNode:
         return c.compileIf(n)
