@@ -1,41 +1,13 @@
 package service
 
 import (
-	"fmt"
 	"time"
+
+	"github.com/dueldanov/lockbox/v2/internal/interfaces"
 )
 
-// String returns the string representation of a tier
-func (t Tier) String() string {
-	switch t {
-	case TierBasic:
-		return "basic"
-	case TierStandard:
-		return "standard"
-	case TierPremium:
-		return "premium"
-	case TierElite:
-		return "elite"
-	default:
-		return "unknown"
-	}
-}
-
-// TierFromString converts a string to a Tier
-func TierFromString(s string) (Tier, error) {
-	switch s {
-	case "basic":
-		return TierBasic, nil
-	case "standard":
-		return TierStandard, nil
-	case "premium":
-		return TierPremium, nil
-	case "elite":
-		return TierElite, nil
-	default:
-		return TierBasic, fmt.Errorf("unknown tier: %s", s)
-	}
-}
+// TierFromString is re-exported from interfaces package for convenience
+var TierFromString = interfaces.TierFromString
 
 // TierCapabilities returns the capabilities for each tier
 type TierCapabilities struct {
@@ -46,6 +18,11 @@ type TierCapabilities struct {
 	GeographicRedundancy int
 	ScriptComplexity     int
 	APIRateLimit         int
+
+	// Shard and decoy settings per LockBox requirements
+	ShardCopies        int     // Number of redundant copies: Basic=3, Standard=5, Premium=7, Elite=10+
+	DecoyRatio         float64 // Ratio of decoy chars to real: Basic=0.5, Standard=1.0, Premium=1.5, Elite=2.0
+	MetadataDecoyRatio float64 // Ratio of decoy metadata: Basic=0, Standard=0, Premium=1.0, Elite=2.0
 }
 
 // GetCapabilities returns the capabilities for a tier
@@ -57,9 +34,12 @@ func GetCapabilities(tier Tier) TierCapabilities {
 			MaxAssetsPerUser:     10,
 			MultiSigSupported:    false,
 			EmergencyUnlock:      false,
-			GeographicRedundancy: 1,
+			GeographicRedundancy: 3, // Minimum 3 regions per requirements
 			ScriptComplexity:     1,
 			APIRateLimit:         100,
+			ShardCopies:          3,
+			DecoyRatio:           0.5, // 0.5x real characters
+			MetadataDecoyRatio:   0,   // No decoy metadata
 		}
 	case TierStandard:
 		return TierCapabilities{
@@ -67,9 +47,12 @@ func GetCapabilities(tier Tier) TierCapabilities {
 			MaxAssetsPerUser:     100,
 			MultiSigSupported:    true,
 			EmergencyUnlock:      true,
-			GeographicRedundancy: 2,
+			GeographicRedundancy: 3, // Minimum 3 regions per requirements
 			ScriptComplexity:     2,
 			APIRateLimit:         1000,
+			ShardCopies:          5,
+			DecoyRatio:           1.0, // 1x real characters
+			MetadataDecoyRatio:   0,   // No decoy metadata
 		}
 	case TierPremium:
 		return TierCapabilities{
@@ -80,6 +63,9 @@ func GetCapabilities(tier Tier) TierCapabilities {
 			GeographicRedundancy: 3,
 			ScriptComplexity:     3,
 			APIRateLimit:         10000,
+			ShardCopies:          7,
+			DecoyRatio:           1.5, // 1.5x real characters
+			MetadataDecoyRatio:   1.0, // 1:1 decoy metadata
 		}
 	case TierElite:
 		return TierCapabilities{
@@ -90,6 +76,9 @@ func GetCapabilities(tier Tier) TierCapabilities {
 			GeographicRedundancy: 5,
 			ScriptComplexity:     4,
 			APIRateLimit:         -1, // unlimited
+			ShardCopies:          10,
+			DecoyRatio:           2.0, // 2x real characters
+			MetadataDecoyRatio:   2.0, // 2:1 decoy metadata
 		}
 	default:
 		return TierCapabilities{} // minimal capabilities

@@ -52,6 +52,23 @@ const (
 	ErrCodeNetworkError        = 6001
 	ErrCodeTimeout             = 6002
 	ErrCodeConnectionFailed    = 6003
+	ErrCodeNetworkPartitioned  = 6004
+
+	// Shard errors (7000-7999) - per LockBox requirements
+	ErrCodeShardUnavailable       = 7001
+	ErrCodeInsufficientShardMatches = 7002
+	ErrCodeInsufficientRegions    = 7003
+
+	// Token/Auth errors (8000-8999) - per LockBox requirements
+	ErrCodeTokenInvalid           = 8001
+	ErrCodeProofInvalid           = 8002
+	ErrCodeRateLimited            = 8003
+	ErrCodeTierViolation          = 8004
+
+	// Bundle/Metadata errors (9000-9999) - per LockBox requirements
+	ErrCodeBundleNotFound         = 9001
+	ErrCodeMetadataCorrupt        = 9002
+	ErrCodeUsernameTaken          = 9003
 )
 
 // LockBoxError represents a structured error with context
@@ -220,9 +237,61 @@ var (
 	ErrTierLimitExceeded = func(tier, limit string) *LockBoxError {
 		return New(ErrCodeTierLimitExceeded, fmt.Sprintf("tier %s limit exceeded: %s", tier, limit))
 	}
-	
+
 	ErrFeatureNotAvailable = func(feature, tier string) *LockBoxError {
 		return New(ErrCodeFeatureNotAvailable, fmt.Sprintf("feature %s not available in tier %s", feature, tier))
+	}
+
+	// Network errors
+	ErrNetworkPartitioned = func() *LockBoxError {
+		return New(ErrCodeNetworkPartitioned, "network experiencing partition")
+	}
+
+	// Shard errors - per LockBox requirements
+	ErrShardUnavailable = func(shardID string) *LockBoxError {
+		return New(ErrCodeShardUnavailable, fmt.Sprintf("shard %s retrieval failed", shardID))
+	}
+
+	ErrInsufficientShardMatches = func(expected, actual int) *LockBoxError {
+		return New(ErrCodeInsufficientShardMatches,
+			fmt.Sprintf("fewer shards decrypted than expected: got %d, need %d", actual, expected))
+	}
+
+	ErrInsufficientRegions = func(available, required int) *LockBoxError {
+		return New(ErrCodeInsufficientRegions,
+			fmt.Sprintf("fewer than %d regions available: only %d regions", required, available))
+	}
+
+	// Token/Auth errors - per LockBox requirements
+	ErrTokenInvalid = func(reason string) *LockBoxError {
+		return New(ErrCodeTokenInvalid, fmt.Sprintf("token invalid or expired: %s", reason))
+	}
+
+	ErrProofInvalid = func(proofType string) *LockBoxError {
+		return New(ErrCodeProofInvalid, fmt.Sprintf("%s validation failed", proofType))
+	}
+
+	ErrRateLimited = func(userID string, retryAfter time.Duration) *LockBoxError {
+		return New(ErrCodeRateLimited,
+			fmt.Sprintf("too many requests for user %s, retry after %v", userID, retryAfter))
+	}
+
+	ErrTierViolation = func(operation, tier string) *LockBoxError {
+		return New(ErrCodeTierViolation,
+			fmt.Sprintf("operation %s not permitted for tier %s", operation, tier))
+	}
+
+	// Bundle/Metadata errors - per LockBox requirements
+	ErrBundleNotFound = func(bundleID string) *LockBoxError {
+		return New(ErrCodeBundleNotFound, fmt.Sprintf("bundle %s not found", bundleID))
+	}
+
+	ErrMetadataCorrupt = func(assetID string) *LockBoxError {
+		return New(ErrCodeMetadataCorrupt, fmt.Sprintf("metadata for %s cannot be processed", assetID))
+	}
+
+	ErrUsernameTaken = func(username string) *LockBoxError {
+		return New(ErrCodeUsernameTaken, fmt.Sprintf("username %s already registered", username))
 	}
 )
 

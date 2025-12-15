@@ -101,6 +101,65 @@ func (h *HKDFManager) DeriveKeyForShard(shardID uint32) ([]byte, error) {
 	return h.DeriveKey(context)
 }
 
+// Purpose-specific HKDF key derivation according to LockBox requirements
+// These methods generate unique keys for each character/metadata fragment
+
+// DeriveKeyForRealChar derives a key for a real character at the given index.
+// Uses info string format: "LockBox:real-char:{index}"
+func (h *HKDFManager) DeriveKeyForRealChar(index uint32) ([]byte, error) {
+	context := []byte(fmt.Sprintf("LockBox:real-char:%d", index))
+	return h.DeriveKey(context)
+}
+
+// DeriveKeyForDecoyChar derives a key for a decoy character at the given index.
+// Uses info string format: "LockBox:decoy-char:{index}"
+// Note: Uses numeric index (not alphabetic) to support >26 decoys
+func (h *HKDFManager) DeriveKeyForDecoyChar(index uint32) ([]byte, error) {
+	context := []byte(fmt.Sprintf("LockBox:decoy-char:%d", index))
+	return h.DeriveKey(context)
+}
+
+// DeriveKeyForRealMeta derives a key for a real metadata fragment at the given index.
+// Uses info string format: "LockBoxMeta:real-meta:{index}"
+func (h *HKDFManager) DeriveKeyForRealMeta(index uint32) ([]byte, error) {
+	context := []byte(fmt.Sprintf("LockBoxMeta:real-meta:%d", index))
+	return h.DeriveKey(context)
+}
+
+// DeriveKeyForDecoyMeta derives a key for a decoy metadata fragment at the given index.
+// Uses info string format: "LockBoxMeta:decoy-meta:{index}"
+func (h *HKDFManager) DeriveKeyForDecoyMeta(index uint32) ([]byte, error) {
+	context := []byte(fmt.Sprintf("LockBoxMeta:decoy-meta:%d", index))
+	return h.DeriveKey(context)
+}
+
+// CharacterKeyType represents the type of character for key derivation
+type CharacterKeyType int
+
+const (
+	KeyTypeRealChar CharacterKeyType = iota
+	KeyTypeDecoyChar
+	KeyTypeRealMeta
+	KeyTypeDecoyMeta
+)
+
+// DeriveKeyByType derives a key based on type and index.
+// This is a convenience method that dispatches to the appropriate method.
+func (h *HKDFManager) DeriveKeyByType(keyType CharacterKeyType, index uint32) ([]byte, error) {
+	switch keyType {
+	case KeyTypeRealChar:
+		return h.DeriveKeyForRealChar(index)
+	case KeyTypeDecoyChar:
+		return h.DeriveKeyForDecoyChar(index)
+	case KeyTypeRealMeta:
+		return h.DeriveKeyForRealMeta(index)
+	case KeyTypeDecoyMeta:
+		return h.DeriveKeyForDecoyMeta(index)
+	default:
+		return nil, fmt.Errorf("unknown key type: %d", keyType)
+	}
+}
+
 // RotateSalt generates a new salt for key derivation
 func (h *HKDFManager) RotateSalt() error {
 	h.mu.Lock()
