@@ -37,17 +37,18 @@ func NewCompilerService(scriptEngine *lockscript.Engine) *CompilerService {
 func (cs *CompilerService) CompileToGo(ctx context.Context, source string) (*CompilationResult, error) {
 	// Generate hash for caching
 	hash := cs.generateHash(source)
-	
+
 	// Check cache
 	if cached, ok := cs.cache[hash]; ok {
 		return cached, nil
 	}
 
-	// Parse script
-	ast, err := cs.scriptEngine.ParseScript(source)
+	// Compile script and extract AST
+	compiled, err := cs.scriptEngine.CompileScript(ctx, source)
 	if err != nil {
 		return nil, fmt.Errorf("parse error: %w", err)
 	}
+	ast := compiled.AST
 
 	// Generate Go code
 	var buf bytes.Buffer

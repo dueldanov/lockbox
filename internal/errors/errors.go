@@ -199,13 +199,21 @@ var (
 	ErrScriptCompilation = func(err error) *LockBoxError {
 		return Wrap(err, ErrCodeScriptCompilation, "script compilation failed")
 	}
-	
+
 	ErrScriptExecution = func(err error) *LockBoxError {
 		return Wrap(err, ErrCodeScriptExecution, "script execution failed")
 	}
-	
+
 	ErrScriptTimeout = func(duration time.Duration) *LockBoxError {
 		return New(ErrCodeScriptTimeout, fmt.Sprintf("script execution timed out after %v", duration))
+	}
+
+	ErrScriptTooLarge = func(maxSize int) *LockBoxError {
+		return New(ErrCodeScriptTooLarge, fmt.Sprintf("script exceeds maximum size of %d bytes", maxSize))
+	}
+
+	ErrInvalidScript = func(reason string) *LockBoxError {
+		return New(ErrCodeInvalidScript, fmt.Sprintf("invalid script: %s", reason))
 	}
 	
 	// Tier errors

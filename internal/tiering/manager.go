@@ -122,16 +122,16 @@ func (m *Manager) initializeTiers() {
 func (m *Manager) CreateAccount(ctx context.Context, accountID string, tierName string) (*Account, error) {
     m.accountsLock.Lock()
     defer m.accountsLock.Unlock()
-    
+
     if _, exists := m.accounts[accountID]; exists {
         return nil, ErrAccountExists
     }
-    
-    tier, exists := m.tiers[tierName]
+
+    _, exists := m.tiers[tierName]
     if !exists {
         return nil, ErrInvalidTier
     }
-    
+
     account := &Account{
         ID:           accountID,
         Tier:         tierName,

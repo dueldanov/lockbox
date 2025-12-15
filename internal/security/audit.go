@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -248,8 +249,8 @@ func (al *AuditLogger) log(entry *AuditEntry) {
 		// Trigger event
 		al.Events.EntryLogged.Trigger(entry)
 	default:
-		// Buffer full, log error
-		al.LogError("audit buffer full", entry)
+		// Buffer full, log warning
+		al.LogWarnf("audit buffer full, dropping entry: %s", entry.ID)
 	}
 }
 

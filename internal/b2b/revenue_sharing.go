@@ -3,15 +3,15 @@ package b2b
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/dueldanov/lockbox/v2/internal/tiering"
 	"github.com/iotaledger/hive.go/kvstore"
 	"github.com/iotaledger/hive.go/logger"
 	"github.com/iotaledger/hive.go/serializer/v2/marshalutil"
-	"github.com/dueldanov/lockbox/v2/internal/tiering"
-	iotago "github.com/iotaledger/iota.go/v3"
 )
 
 const (
@@ -230,7 +230,7 @@ func (rm *RevenueManager) GetPartnerStatistics(partnerID string) (*PartnerStatis
 	key := rm.partnerStatsKey(partnerID)
 	value, err := rm.store.Get(key)
 	if err != nil {
-		if kvstore.IsKeyNotFoundError(err) {
+		if errors.Is(err, kvstore.ErrKeyNotFound) {
 			return &PartnerStatistics{
 				PartnerID: partnerID,
 			}, nil
@@ -275,7 +275,7 @@ func (rm *RevenueManager) getPaymentStatus(partnerID string) (*PaymentStatus, er
 	key := rm.paymentStatusKey(partnerID)
 	value, err := rm.store.Get(key)
 	if err != nil {
-		if kvstore.IsKeyNotFoundError(err) {
+		if errors.Is(err, kvstore.ErrKeyNotFound) {
 			return &PaymentStatus{
 				PartnerID:       partnerID,
 				NextPaymentDate: time.Now().Add(24 * time.Hour),

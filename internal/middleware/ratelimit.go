@@ -6,14 +6,22 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dueldanov/lockbox/v2/internal/service"
 	"github.com/dueldanov/lockbox/v2/internal/errors"
 	"github.com/dueldanov/lockbox/v2/internal/performance"
+	"github.com/dueldanov/lockbox/v2/internal/service"
+	"github.com/dueldanov/lockbox/v2/internal/tiering"
 )
+
+// Service defines the interface for service operations that can be wrapped by middleware
+type Service interface {
+	LockAsset(ctx context.Context, req *service.LockAssetRequest) (*service.LockAssetResponse, error)
+	UnlockAsset(ctx context.Context, req *service.UnlockAssetRequest) (*service.UnlockAssetResponse, error)
+	GetAssetStatus(assetID string) (*service.LockedAsset, error)
+}
 
 // RateLimitMiddleware provides rate limiting
 type RateLimitMiddleware struct {
-	next         lockbox.Service
+	next         Service
 	limiter      *performance.ResourceLimiter
 	tierManager  *tiering.Manager
 	limiters     map[string]*UserRateLimiter
@@ -23,14 +31,14 @@ type RateLimitMiddleware struct {
 // UserRateLimiter tracks per-user rate limits
 type UserRateLimiter struct {
 	userID       string
-	tier         lockbox.Tier
+	tier         service.Tier
 	requests     []time.Time
 	mu           sync.Mutex
 	lastCleanup  time.Time
 }
 
 // NewRateLimitMiddleware creates rate limit middleware
-func NewRateLimitMiddleware(next lockbox.Service, limiter *performance.ResourceLimiter, tierManager *tiering.Manager) *RateLimitMiddleware {
+func NewRateLimitMiddleware(next Service, limiter *performance.ResourceLimiter, tierManager *tiering.Manager) *RateLimitMiddleware {
 	return &RateLimitMiddleware{
 		next:        next,
 		limiter:     limiter,
@@ -49,14 +57,10 @@ func getUserID(ctx context.Context) string {
 }
 
 // getUserTier gets user's tier
-func (r *RateLimitMiddleware) getUserTier(ctx context.Context, userID string) lockbox.Tier {
-	account, err := r.tierManager.GetAccount(ctx, userID)
-	if err != nil || account == nil {
-		return lockbox.TierBasic
-	}
-	
-	tier, _ := lockbox.TierFromString(account.Tier)
-	return tier
+func (r *RateLimitMiddleware) getUserTier(ctx context.Context, userID string) service.Tier {
+	// tiering.Manager doesn't have GetAccount method, return basic tier
+	// TODO: implement proper tier lookup when tiering.Manager is updated
+	return service.TierBasic
 }
 
 // checkRateLimit checks if request is within rate limits
@@ -124,15 +128,15 @@ func (r *RateLimitMiddleware) checkRateLimit(ctx context.Context, operation stri
 }
 
 // getHourlyLimit returns hourly request limit for tier
-func getHourlyLimit(tier lockbox.Tier) int {
+func getHourlyLimit(tier service.Tier) int {
 	switch tier {
-	case lockbox.TierBasic:
+	case service.TierBasic:
 		return 1000
-	case lockbox.TierStandard:
+	case service.TierStandard:
 		return 10000
-	case lockbox.TierPremium:
+	case service.TierPremium:
 		return 100000
-	case lockbox.TierElite:
+	case service.TierElite:
 		return -1 // unlimited
 	default:
 		return 1000
@@ -140,30 +144,31 @@ func getHourlyLimit(tier lockbox.Tier) int {
 }
 
 // LockAsset implements rate-limited lock asset
-func (r *RateLimitMiddleware) LockAsset(ctx context.Context, req *lockbox.LockAssetRequest) (*lockbox.LockAssetResponse, error) {
+func (r *RateLimitMiddleware) LockAsset(ctx context.Context, req *service.LockAssetRequest) (*service.LockAssetResponse, error) {
 	if err := r.checkRateLimit(ctx, "lock_asset"); err != nil {
 		return nil, err
 	}
-	
+
 	return r.next.LockAsset(ctx, req)
 }
 
 // UnlockAsset implements rate-limited unlock asset
-func (r *RateLimitMiddleware) UnlockAsset(ctx context.Context, req *lockbox.UnlockAssetRequest) (*lockbox.UnlockAssetResponse, error) {
+func (r *RateLimitMiddleware) UnlockAsset(ctx context.Context, req *service.UnlockAssetRequest) (*service.UnlockAssetResponse, error) {
 	if err := r.checkRateLimit(ctx, "unlock_asset"); err != nil {
 		return nil, err
 	}
-	
+
 	return r.next.UnlockAsset(ctx, req)
 }
 
 // GetAssetStatus implements rate-limited get asset status
-func (r *RateLimitMiddleware) GetAssetStatus(ctx context.Context, assetID string) (*lockbox.LockedAsset, error) {
+func (r *RateLimitMiddleware) GetAssetStatus(assetID string) (*service.LockedAsset, error) {
+	ctx := context.Background()
 	if err := r.checkRateLimit(ctx, "get_asset_status"); err != nil {
 		return nil, err
 	}
-	
-	return r.next.GetAssetStatus(ctx, assetID)
+
+	return r.next.GetAssetStatus(assetID)
 }
 
 // Cleanup cleans up old rate limit data

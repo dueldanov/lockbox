@@ -6,25 +6,26 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dueldanov/lockbox/v2/internal/service"
 	"github.com/dueldanov/lockbox/v2/internal/errors"
+	"github.com/dueldanov/lockbox/v2/internal/lockscript"
+	"github.com/dueldanov/lockbox/v2/internal/service"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 
 // ValidationMiddleware provides request validation
 type ValidationMiddleware struct {
-	next lockbox.Service
+	next Service
 }
 
 // NewValidationMiddleware creates validation middleware
-func NewValidationMiddleware(next lockbox.Service) *ValidationMiddleware {
+func NewValidationMiddleware(next Service) *ValidationMiddleware {
 	return &ValidationMiddleware{
 		next: next,
 	}
 }
 
 // LockAsset validates and forwards lock asset requests
-func (v *ValidationMiddleware) LockAsset(ctx context.Context, req *lockbox.LockAssetRequest) (*lockbox.LockAssetResponse, error) {
+func (v *ValidationMiddleware) LockAsset(ctx context.Context, req *service.LockAssetRequest) (*service.LockAssetResponse, error) {
 	// Validate owner address
 	if req.OwnerAddress == nil {
 		return nil, errors.ErrInvalidArgument("owner address is required")
@@ -65,7 +66,7 @@ func (v *ValidationMiddleware) LockAsset(ctx context.Context, req *lockbox.LockA
 }
 
 // UnlockAsset validates and forwards unlock asset requests
-func (v *ValidationMiddleware) UnlockAsset(ctx context.Context, req *lockbox.UnlockAssetRequest) (*lockbox.UnlockAssetResponse, error) {
+func (v *ValidationMiddleware) UnlockAsset(ctx context.Context, req *service.UnlockAssetRequest) (*service.UnlockAssetResponse, error) {
 	// Validate asset ID
 	if req.AssetID == "" {
 		return nil, errors.ErrInvalidArgument("asset ID is required")
@@ -94,18 +95,18 @@ func (v *ValidationMiddleware) UnlockAsset(ctx context.Context, req *lockbox.Unl
 }
 
 // GetAssetStatus validates and forwards get asset status requests
-func (v *ValidationMiddleware) GetAssetStatus(ctx context.Context, assetID string) (*lockbox.LockedAsset, error) {
+func (v *ValidationMiddleware) GetAssetStatus(assetID string) (*service.LockedAsset, error) {
 	// Validate asset ID
 	if assetID == "" {
 		return nil, errors.ErrInvalidArgument("asset ID is required")
 	}
-	
+
 	// Validate asset ID format
 	if !isValidAssetID(assetID) {
 		return nil, errors.ErrInvalidArgument("invalid asset ID format")
 	}
-	
-	return v.next.GetAssetStatus(ctx, assetID)
+
+	return v.next.GetAssetStatus(assetID)
 }
 
 // isValidAssetID validates asset ID format
@@ -129,24 +130,26 @@ func isValidAssetID(id string) bool {
 	return true
 }
 
-// CompileScript validates and forwards compile script requests
+// CompileScript validates compile script requests
+// Note: This method is not part of the Service interface
 func (v *ValidationMiddleware) CompileScript(ctx context.Context, source string) (*lockscript.CompiledScript, error) {
 	// Validate script source
 	if source == "" {
 		return nil, errors.ErrInvalidArgument("script source is required")
 	}
-	
+
 	// Check script size
 	if len(source) > 65536 {
 		return nil, errors.ErrScriptTooLarge(65536)
 	}
-	
+
 	// Basic syntax validation
 	if err := validateScriptSyntax(source); err != nil {
 		return nil, errors.ErrInvalidScript(err.Error())
 	}
-	
-	return v.next.CompileScript(ctx, source)
+
+	// TODO: CompileScript is not part of Service interface, need to add or remove
+	return nil, fmt.Errorf("CompileScript not implemented in middleware")
 }
 
 // validateScriptSyntax performs basic syntax validation

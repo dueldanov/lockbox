@@ -1,9 +1,7 @@
 package storage
 
 import (
-	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -12,10 +10,8 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/iotaledger/hive.go/kvstore"
 	"github.com/iotaledger/hive.go/logger"
 	"github.com/iotaledger/hive.go/objectstorage"
-	"github.com/iotaledger/hive.go/serializer/v2/marshalutil"
 )
 
 // Shard represents a data shard in the storage system
@@ -269,82 +265,13 @@ func (s *Shard) Serialize() ([]byte, error) {
 		s.Hash = h[:]
 	}
 
-	m := marshalutil.New()
-	m.WriteString(s.ID)
-	m.WriteUint32(s.Index)
-	m.WriteUint32(s.TotalShards)
-	m.WriteUint32(uint32(len(s.Data)))
-	m.WriteBytes(s.Data)
-	m.WriteBytes(s.Hash)
-	m.WriteTime(s.CreatedAt)
-	m.WriteUint64(s.Size)
-	
-	// Serialize metadata as JSON
-	metadataBytes, err := json.Marshal(s.Metadata)
-	if err != nil {
-		return nil, err
-	}
-	m.WriteBytes(metadataBytes)
-
-	return m.Bytes(), nil
+	// Use JSON serialization for simplicity
+	return json.Marshal(s)
 }
 
 func (s *Shard) Deserialize(data []byte) error {
-	m := marshalutil.New(data)
-
-	id, err := m.ReadString()
-	if err != nil {
-		return err
-	}
-	s.ID = id
-
-	s.Index, err = m.ReadUint32()
-	if err != nil {
-		return err
-	}
-
-	s.TotalShards, err = m.ReadUint32()
-	if err != nil {
-		return err
-	}
-
-	dataLen, err := m.ReadUint32()
-	if err != nil {
-		return err
-	}
-
-	s.Data, err = m.ReadBytes(int(dataLen))
-	if err != nil {
-		return err
-	}
-
-	s.Hash, err = m.ReadBytes(32) // SHA256 hash size
-	if err != nil {
-		return err
-	}
-
-	s.CreatedAt, err = m.ReadTime()
-	if err != nil {
-		return err
-	}
-
-	s.Size, err = m.ReadUint64()
-	if err != nil {
-		return err
-	}
-
-	metadataBytes, err := m.ReadRemainingBytes()
-	if err != nil {
-		return err
-	}
-
-	if len(metadataBytes) > 0 {
-		if err := json.Unmarshal(metadataBytes, &s.Metadata); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	// Use JSON deserialization for simplicity
+	return json.Unmarshal(data, s)
 }
 
 // ShardDistribution implementation of objectstorage.StorableObject
