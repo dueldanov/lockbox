@@ -13,16 +13,16 @@ func TestCalculateCommitment_NotReversible(t *testing.T) {
 	ownerSecret := []byte("secret456")
 	nonce := []byte("nonce789")
 
-	commitment := calculateCommitment(assetID, ownerSecret, nonce)
+	commitment := CalculateCommitment(assetID, ownerSecret, nonce)
 
 	// Commitment should be deterministic
-	commitment2 := calculateCommitment(assetID, ownerSecret, nonce)
+	commitment2 := CalculateCommitment(assetID, ownerSecret, nonce)
 	if commitment.Cmp(commitment2) != 0 {
 		t.Error("Commitment should be deterministic")
 	}
 
 	// Different inputs should produce different commitments
-	commitment3 := calculateCommitment([]byte("different"), ownerSecret, nonce)
+	commitment3 := CalculateCommitment([]byte("different"), ownerSecret, nonce)
 	if commitment.Cmp(commitment3) == 0 {
 		t.Error("Different inputs should produce different commitments")
 	}
@@ -37,10 +37,10 @@ func TestCalculateCommitment_NoCollisions(t *testing.T) {
 	// Test that length-prefixing prevents ambiguous inputs
 
 	// Case 1: assetID="ab", ownerSecret="cd", nonce="ef"
-	c1 := calculateCommitment([]byte("ab"), []byte("cd"), []byte("ef"))
+	c1 := CalculateCommitment([]byte("ab"), []byte("cd"), []byte("ef"))
 
 	// Case 2: assetID="abc", ownerSecret="d", nonce="ef"
-	c2 := calculateCommitment([]byte("abc"), []byte("d"), []byte("ef"))
+	c2 := CalculateCommitment([]byte("abc"), []byte("d"), []byte("ef"))
 
 	// These should be different (length-prefixing prevents collision)
 	if c1.Cmp(c2) == 0 {
@@ -48,7 +48,7 @@ func TestCalculateCommitment_NoCollisions(t *testing.T) {
 	}
 
 	// Case 3: assetID="a", ownerSecret="bcd", nonce="ef"
-	c3 := calculateCommitment([]byte("a"), []byte("bcd"), []byte("ef"))
+	c3 := CalculateCommitment([]byte("a"), []byte("bcd"), []byte("ef"))
 
 	// All three should be different
 	if c1.Cmp(c3) == 0 || c2.Cmp(c3) == 0 {
@@ -60,11 +60,11 @@ func TestCalculateAddress_DomainSeparation(t *testing.T) {
 	secret := []byte("shared-secret")
 
 	// Calculate using address function
-	address := calculateAddress(secret)
+	address := CalculateAddress(secret)
 
 	// Calculate what commitment would produce with same input
 	// Using empty bytes for ownerSecret and nonce
-	commitment := calculateCommitment(secret, []byte{}, []byte{})
+	commitment := CalculateCommitment(secret, []byte{}, []byte{})
 
 	// These should be different due to domain separation
 	if address.Cmp(commitment) == 0 {
@@ -75,8 +75,8 @@ func TestCalculateAddress_DomainSeparation(t *testing.T) {
 func TestCalculateAddress_Deterministic(t *testing.T) {
 	secret := []byte("my-secret")
 
-	addr1 := calculateAddress(secret)
-	addr2 := calculateAddress(secret)
+	addr1 := CalculateAddress(secret)
+	addr2 := CalculateAddress(secret)
 
 	if addr1.Cmp(addr2) != 0 {
 		t.Error("Address calculation should be deterministic")
@@ -84,8 +84,8 @@ func TestCalculateAddress_Deterministic(t *testing.T) {
 }
 
 func TestCalculateAddress_DifferentSecrets(t *testing.T) {
-	addr1 := calculateAddress([]byte("secret-1"))
-	addr2 := calculateAddress([]byte("secret-2"))
+	addr1 := CalculateAddress([]byte("secret-1"))
+	addr2 := CalculateAddress([]byte("secret-2"))
 
 	if addr1.Cmp(addr2) == 0 {
 		t.Error("Different secrets should produce different addresses")
@@ -101,26 +101,26 @@ func TestCalculateUnlockCommitment_Comprehensive(t *testing.T) {
 	rand.Read(assetID)
 	rand.Read(additionalData)
 
-	c1 := calculateUnlockCommitment(unlockSecret, assetID, additionalData)
+	c1 := CalculateUnlockCommitment(unlockSecret, assetID, additionalData)
 
 	// Should be deterministic
-	c2 := calculateUnlockCommitment(unlockSecret, assetID, additionalData)
+	c2 := CalculateUnlockCommitment(unlockSecret, assetID, additionalData)
 	if c1.Cmp(c2) != 0 {
 		t.Error("Unlock commitment should be deterministic")
 	}
 
 	// Should change with any input change
-	c3 := calculateUnlockCommitment(unlockSecret, assetID, []byte("different"))
+	c3 := CalculateUnlockCommitment(unlockSecret, assetID, []byte("different"))
 	if c1.Cmp(c3) == 0 {
 		t.Error("Changing additional data should change commitment")
 	}
 
-	c4 := calculateUnlockCommitment(unlockSecret, []byte("different"), additionalData)
+	c4 := CalculateUnlockCommitment(unlockSecret, []byte("different"), additionalData)
 	if c1.Cmp(c4) == 0 {
 		t.Error("Changing assetID should change commitment")
 	}
 
-	c5 := calculateUnlockCommitment([]byte("different"), assetID, additionalData)
+	c5 := CalculateUnlockCommitment([]byte("different"), assetID, additionalData)
 	if c1.Cmp(c5) == 0 {
 		t.Error("Changing unlockSecret should change commitment")
 	}
@@ -129,9 +129,9 @@ func TestCalculateUnlockCommitment_Comprehensive(t *testing.T) {
 func TestHashFunctions_ProduceValidBigInt(t *testing.T) {
 	data := []byte("test-data")
 
-	commitment := calculateCommitment(data, data, data)
-	address := calculateAddress(data)
-	unlock := calculateUnlockCommitment(data, data, data)
+	commitment := CalculateCommitment(data, data, data)
+	address := CalculateAddress(data)
+	unlock := CalculateUnlockCommitment(data, data, data)
 
 	// All should be non-nil positive integers
 	if commitment == nil || commitment.Sign() <= 0 {
@@ -184,9 +184,9 @@ func TestDomainSeparation_AllFunctions(t *testing.T) {
 
 	// All three functions should produce different results for the same input
 	// due to domain separation
-	commitment := calculateCommitment(data, data, data)
-	address := calculateAddress(data)
-	unlock := calculateUnlockCommitment(data, data, data)
+	commitment := CalculateCommitment(data, data, data)
+	address := CalculateAddress(data)
+	unlock := CalculateUnlockCommitment(data, data, data)
 
 	if commitment.Cmp(address) == 0 {
 		t.Error("Commitment and address should differ (domain separation)")
@@ -201,13 +201,13 @@ func TestDomainSeparation_AllFunctions(t *testing.T) {
 
 func TestCalculateCommitment_EmptyInputs(t *testing.T) {
 	// Should handle empty inputs gracefully
-	c1 := calculateCommitment([]byte{}, []byte{}, []byte{})
+	c1 := CalculateCommitment([]byte{}, []byte{}, []byte{})
 	if c1 == nil {
 		t.Error("Should handle empty inputs")
 	}
 
 	// Different combinations of empty/non-empty should produce different results
-	c2 := calculateCommitment([]byte("data"), []byte{}, []byte{})
+	c2 := CalculateCommitment([]byte("data"), []byte{}, []byte{})
 	if c1.Cmp(c2) == 0 {
 		t.Error("Empty and non-empty inputs should produce different results")
 	}

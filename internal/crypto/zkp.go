@@ -184,8 +184,8 @@ func (z *ZKPManager) GenerateOwnershipProof(assetID []byte, ownerSecret []byte) 
 	}
 
 	// Calculate commitments
-	assetCommitment := calculateCommitment(assetID, ownerSecret, nonce)
-	ownerAddress := calculateAddress(ownerSecret)
+	assetCommitment := CalculateCommitment(assetID, ownerSecret, nonce)
+	ownerAddress := CalculateAddress(ownerSecret)
 
 	witness.AssetCommitment = assetCommitment
 	witness.OwnerAddress = ownerAddress
@@ -269,7 +269,7 @@ func (z *ZKPManager) GenerateUnlockProof(unlockSecret, assetID, additionalData [
 	}
 
 	// Calculate commitment
-	unlockCommitment := calculateUnlockCommitment(unlockSecret, assetID, additionalData)
+	unlockCommitment := CalculateUnlockCommitment(unlockSecret, assetID, additionalData)
 	witness.UnlockCommitment = unlockCommitment
 
 	// Convert to witness format
@@ -387,10 +387,10 @@ func writeLengthPrefixed(h hash.Hash, data []byte) {
 	h.Write(data)
 }
 
-// calculateCommitment creates a cryptographic commitment to an asset using SHA256
+// CalculateCommitment creates a cryptographic commitment to an asset using SHA256
 // Domain: "lockbox-commitment-v1"
 // This prevents length extension attacks and cross-protocol attacks
-func calculateCommitment(assetID, ownerSecret, nonce []byte) *big.Int {
+func CalculateCommitment(assetID, ownerSecret, nonce []byte) *big.Int {
 	h := sha256.New()
 
 	// Domain separator to prevent cross-protocol attacks
@@ -405,9 +405,9 @@ func calculateCommitment(assetID, ownerSecret, nonce []byte) *big.Int {
 	return new(big.Int).SetBytes(hash)
 }
 
-// calculateAddress derives an address from a secret using SHA256
+// CalculateAddress derives an address from a secret using SHA256
 // Domain: "lockbox-address-v1"
-func calculateAddress(secret []byte) *big.Int {
+func CalculateAddress(secret []byte) *big.Int {
 	h := sha256.New()
 
 	// Domain separator
@@ -420,9 +420,9 @@ func calculateAddress(secret []byte) *big.Int {
 	return new(big.Int).SetBytes(hash)
 }
 
-// calculateUnlockCommitment creates a commitment for unlock verification using SHA256
+// CalculateUnlockCommitment creates a commitment for unlock verification using SHA256
 // Domain: "lockbox-unlock-v1"
-func calculateUnlockCommitment(unlockSecret, assetID, additionalData []byte) *big.Int {
+func CalculateUnlockCommitment(unlockSecret, assetID, additionalData []byte) *big.Int {
 	h := sha256.New()
 
 	// Domain separator
