@@ -1,3 +1,6 @@
+//go:build loadtest
+// +build loadtest
+
 package testing
 
 import (
@@ -8,16 +11,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/iotaledger/hive.go/logger"
+	"github.com/dueldanov/lockbox/v2/internal/lockscript"
 	"github.com/dueldanov/lockbox/v2/internal/service"
+	"github.com/iotaledger/hive.go/logger"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 
 // LoadTester performs load testing for LockBox
 type LoadTester struct {
 	*logger.WrappedLogger
-	
-	service      *lockbox.Service
+
+	svc          *service.Service
 	config       *LoadTestConfig
 	
 	// Metrics
@@ -50,7 +54,7 @@ type LoadTestConfig struct {
 	QueryPercent         int
 	
 	// Tier distribution
-	TierDistribution map[lockbox.Tier]int
+	TierDistribution map[service.Tier]int
 	
 	// Asset configuration
 	MinAssetValue    uint64
@@ -87,7 +91,7 @@ type LoadTestResults struct {
 	ErrorDistribution  map[string]uint64
 	
 	OperationMetrics   map[string]*OperationMetrics
-	TierMetrics        map[lockbox.Tier]*TierMetrics
+	TierMetrics        map[service.Tier]*TierMetrics
 }
 
 // OperationMetrics tracks metrics per operation type
@@ -109,16 +113,16 @@ type TierMetrics struct {
 }
 
 // NewLoadTester creates a new load tester
-func NewLoadTester(log *logger.Logger, service *lockbox.Service, config *LoadTestConfig) *LoadTester {
+func NewLoadTester(log *logger.Logger, svc *service.Service, config *LoadTestConfig) *LoadTester {
 	return &LoadTester{
 		WrappedLogger: logger.NewWrappedLogger(log),
-		service:       service,
+		svc:           svc,
 		config:        config,
 		workers:       config.Workers,
 		stopChan:      make(chan struct{}),
 		results: &LoadTestResults{
 			OperationMetrics:   make(map[string]*OperationMetrics),
-			TierMetrics:        make(map[lockbox.Tier]*TierMetrics),
+			TierMetrics:        make(map[service.Tier]*TierMetrics),
 			ErrorDistribution:  make(map[string]uint64),
 			LatencyPercentiles: make(map[int]time.Duration),
 		},
@@ -214,7 +218,7 @@ func (lt *LoadTester) selectOperation() string {
 }
 
 // selectTier selects a tier based on distribution
-func (lt *LoadTester) selectTier() lockbox.Tier {
+func (lt *LoadTester) selectTier() service.Tier {
 	r := rand.Intn(100)
 	cumulative := 0
 	
@@ -225,11 +229,11 @@ func (lt *LoadTester) selectTier() lockbox.Tier {
 		}
 	}
 	
-	return lockbox.TierBasic
+	return service.TierBasic
 }
 
 // executeOperation executes a test operation
-func (lt *LoadTester) executeOperation(ctx context.Context, operation string, tier lockbox.Tier, testAssets map[string]*TestAsset) error {
+func (lt *LoadTester) executeOperation(ctx context.Context, operation string, tier service.Tier, testAssets map[string]*TestAsset) error {
 	switch operation {
 	case "lock":
 		return lt.executeLockAsset(ctx, tier)
@@ -245,13 +249,13 @@ func (lt *LoadTester) executeOperation(ctx context.Context, operation string, ti
 }
 
 // executeLockAsset performs a lock asset operation
-func (lt *LoadTester) executeLockAsset(ctx context.Context, tier lockbox.Tier) error {
+func (lt *LoadTester) executeLockAsset(ctx context.Context, tier service.Tier) error {
 	// Generate random asset
 	value := lt.config.MinAssetValue + uint64(rand.Int63n(int64(lt.config.MaxAssetValue-lt.config.MinAssetValue)))
 	duration := lt.config.MinLockDuration + time.Duration(rand.Int63n(int64(lt.config.MaxLockDuration-lt.config.MinLockDuration)))
 	
 	// Create lock request
-	req := &lockbox.LockAssetRequest{
+	req := &service.LockAssetRequest{
 		OwnerAddress: generateTestAddress(),
 		OutputID:     generateTestOutputID(),
 		LockDuration: duration,
@@ -259,12 +263,12 @@ func (lt *LoadTester) executeLockAsset(ctx context.Context, tier lockbox.Tier) e
 	}
 	
 	// Execute lock
-	_, err := lt.service.LockAsset(ctx, req)
+	_, err := lt.svc.LockAsset(ctx, req)
 	return err
 }
 
 // executeUnlockAsset performs an unlock asset operation
-func (lt *LoadTester) executeUnlockAsset(ctx context.Context, tier lockbox.Tier, testAssets map[string]*TestAsset) error {
+func (lt *LoadTester) executeUnlockAsset(ctx context.Context, tier service.Tier, testAssets map[string]*TestAsset) error {
 	// Select random locked asset
 	if len(testAssets) == 0 {
 		return fmt.Errorf("no assets to unlock")
@@ -277,22 +281,22 @@ func (lt *LoadTester) executeUnlockAsset(ctx context.Context, tier lockbox.Tier,
 	}
 	
 	// Create unlock request
-	req := &lockbox.UnlockAssetRequest{
+	req := &service.UnlockAssetRequest{
 		AssetID: assetID,
 	}
 	
 	// Execute unlock
-	_, err := lt.service.UnlockAsset(ctx, req)
+	_, err := lt.svc.UnlockAsset(ctx, req)
 	return err
 }
 
 // executeScript performs a script execution
-func (lt *LoadTester) executeScript(ctx context.Context, tier lockbox.Tier) error {
+func (lt *LoadTester) executeScript(ctx context.Context, tier service.Tier) error {
 	// Generate test script
 	script := generateTestScript(lt.config.ScriptComplexity)
 	
 	// Compile and execute
-	compiled, err := lt.service.CompileScript(ctx, script)
+	compiled, err := lt.svc.CompileScript(ctx, script)
 	if err != nil {
 		return err
 	}
@@ -304,12 +308,12 @@ func (lt *LoadTester) executeScript(ctx context.Context, tier lockbox.Tier) erro
 		},
 	}
 	
-	_, err = lt.service.ExecuteScript(ctx, compiled, env)
+	_, err = lt.svc.ExecuteScript(ctx, compiled, env)
 	return err
 }
 
 // executeQuery performs a query operation
-func (lt *LoadTester) executeQuery(ctx context.Context, tier lockbox.Tier, testAssets map[string]*TestAsset) error {
+func (lt *LoadTester) executeQuery(ctx context.Context, tier service.Tier, testAssets map[string]*TestAsset) error {
 	// Randomly query assets or status
 	if rand.Intn(2) == 0 {
 		// Query specific asset
@@ -319,18 +323,18 @@ func (lt *LoadTester) executeQuery(ctx context.Context, tier lockbox.Tier, testA
 				assetID = id
 				break
 			}
-			_, err := lt.service.GetAssetStatus(ctx, assetID)
+			_, err := lt.svc.GetAssetStatus(ctx, assetID)
 			return err
 		}
 	}
 	
 	// Query account info
-	_, err := lt.service.GetAccountInfo(ctx, generateTestAccountID())
+	_, err := lt.svc.GetAccountInfo(ctx, generateTestAccountID())
 	return err
 }
 
 // recordMetrics records operation metrics
-func (lt *LoadTester) recordMetrics(operation string, tier lockbox.Tier, err error, latency time.Duration) {
+func (lt *LoadTester) recordMetrics(operation string, tier service.Tier, err error, latency time.Duration) {
 	atomic.AddUint64(&lt.totalRequests, 1)
 	
 	if err == nil {
