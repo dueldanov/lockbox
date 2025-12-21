@@ -207,3 +207,174 @@ gofmt -s -w .
 3. **Безопасность** - defense in depth
 4. **Тиры** - разные возможности по уровню
 5. **IOTA** - интеграция с блокчейном
+
+---
+
+## Граф зависимостей модулей
+
+```
+interfaces (no deps) ← базовые типы для избежания import cycles
+     ↓
+   crypto (interfaces) ← HKDF, ChaCha20, Decoys, ZKP
+     ↓
+lockscript (crypto) ← VM, Parser, Ed25519 signing
+     ↓
+verification (interfaces, crypto) ← Nodes, Tokens, Rate Limiting
+     ↓
+  service (ALL above) ← LockAsset, UnlockAsset, Tiers
+```
+
+**ВАЖНО:** Никогда не добавляй импорт `service` → `verification` или обратно напрямую. Используй `interfaces`.
+
+---
+
+## Паттерны кода
+
+### Инициализация криптографии
+
+```go
+// Создание master key
+masterKey := make([]byte, 32)
+rand.Read(masterKey)
+
+// HKDF manager для деривации ключей
+hkdf, err := crypto.NewHKDFManager(masterKey)
+if err != nil {
+    return err
+}
+defer hkdf.Clear() // ОБЯЗАТЕЛЬНО очищать память
+
+// Деривация ключа для конкретного шарда
+key := hkdf.DeriveKey("shard-encrypt", shardIndex)
+```
+
+### Работа с Decoys
+
+```go
+// Получить capabilities тира
+caps := service.GetCapabilities(service.TierStandard)
+
+// Генерировать decoy shards
+gen := crypto.NewDecoyGenerator()
+decoys := gen.GenerateDecoyShards(realShards, caps.DecoyRatio)
+
+// Смешать real и decoy
+mixer := crypto.NewShardMixer()
+mixed, indexMap := mixer.Mix(realShards, decoys)
+
+// При восстановлении - извлечь только real
+realOnly := mixer.ExtractReal(mixed, indexMap)
+```
+
+### Tier Capabilities
+
+```go
+// Всегда проверяй tier перед операцией
+caps := service.GetCapabilities(s.config.Tier)
+
+// Multi-sig доступен не всем
+if caps.MultiSigSupported {
+    // разрешить multi-sig
+}
+
+// Emergency unlock
+if caps.EmergencyUnlock {
+    // разрешить экстренную разблокировку
+}
+
+// Количество копий шардов
+for copy := 0; copy < caps.ShardCopies; copy++ {
+    storeShardCopy(shard, copy)
+}
+```
+
+### LockScript выполнение
+
+```go
+// Создать engine
+engine := lockscript.NewEngine(nil, 65536, 5*time.Second)
+engine.RegisterBuiltinFunctions()
+
+// Компилировать скрипт
+compiled, err := engine.CompileScript(ctx, script)
+if err != nil {
+    return err
+}
+
+// Выполнить с контекстом
+ctx := lockscript.NewContext()
+ctx.Set("unlock_time", asset.UnlockTime.Unix())
+ctx.Set("signatures", req.Signatures)
+
+result, err := engine.Execute(compiled, ctx)
+if !result.(bool) {
+    return ErrUnauthorized
+}
+```
+
+### Избежание Import Cycles
+
+```go
+// ❌ НЕПРАВИЛЬНО - создаёт цикл
+// verification/verifier.go
+import "github.com/dueldanov/lockbox/v2/internal/service"
+
+// ✅ ПРАВИЛЬНО - используй interfaces
+// verification/verifier.go
+import "github.com/dueldanov/lockbox/v2/internal/interfaces"
+
+type Verifier struct {
+    assetService interfaces.AssetService // интерфейс, не конкретный тип
+}
+```
+
+---
+
+## Текущие проблемы для исправления
+
+### 1. TestLockAsset падает
+```
+Файл: internal/service/service_test.go:16
+Проблема: logger not initialized
+Решение: Добавить initTestLogger() с sync.Once
+```
+
+### 2. Import cycle в verification_test.go
+```
+Файл: internal/verification/verification_test.go:9
+Проблема: imports service which imports verification
+Решение: Использовать interfaces.TierStandard вместо service.TierStandard
+```
+
+### 3. Компоненты не интегрированы
+```
+LockAsset (service.go:163):
+- НЕ вызывает DecoyGenerator
+- НЕ применяет tier.ShardCopies
+- НЕ исполняет LockScript
+
+UnlockAsset (service.go:210):
+- НЕ проверяет multi-sig (TODO на line 587)
+- НЕ исполняет LockScript условия
+```
+
+---
+
+## Тесты
+
+### Unit тесты (работают)
+```bash
+go test ./internal/crypto/... -v        # PASS
+go test ./internal/lockscript/... -v    # PASS
+```
+
+### Integration тесты (частично)
+```bash
+go test ./tests/integration/... -v      # PASS (ограниченно)
+```
+
+### Проблемные тесты
+```bash
+go test ./internal/service/... -v       # FAIL - logger
+go test ./internal/verification/... -v  # FAIL - import cycle
+```
