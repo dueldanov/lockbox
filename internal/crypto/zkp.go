@@ -2,16 +2,14 @@ package crypto
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash"
 	"math/big"
 	"sync"
 	"time"
 
 	"github.com/consensys/gnark-crypto/ecc"
+	mimcHash "github.com/consensys/gnark-crypto/ecc/bn254/fr/mimc"
 	"github.com/consensys/gnark/backend/groth16"
 	"github.com/consensys/gnark/constraint"
 	"github.com/consensys/gnark/frontend"
@@ -378,60 +376,41 @@ type UnlockProof struct {
 
 // Helper functions
 
-// writeLengthPrefixed writes data with a length prefix to prevent ambiguity
-// This ensures that different combinations of inputs produce different hashes
-func writeLengthPrefixed(h hash.Hash, data []byte) {
-	length := make([]byte, 4)
-	binary.BigEndian.PutUint32(length, uint32(len(data)))
-	h.Write(length)
-	h.Write(data)
-}
-
-// CalculateCommitment creates a cryptographic commitment to an asset using SHA256
-// Domain: "lockbox-commitment-v1"
-// This prevents length extension attacks and cross-protocol attacks
+// CalculateCommitment creates a cryptographic commitment to an asset using MiMC
+// Uses MiMC hash to be consistent with the ZKP circuit which also uses MiMC
 func CalculateCommitment(assetID, ownerSecret, nonce []byte) *big.Int {
-	h := sha256.New()
+	h := mimcHash.NewMiMC()
 
-	// Domain separator to prevent cross-protocol attacks
-	h.Write([]byte("lockbox-commitment-v1"))
-
-	// Length-prefix inputs to prevent length extension attacks
-	writeLengthPrefixed(h, assetID)
-	writeLengthPrefixed(h, ownerSecret)
-	writeLengthPrefixed(h, nonce)
+	// Write data in same order as circuit (zkp.go:75-77)
+	h.Write(assetID)
+	h.Write(ownerSecret)
+	h.Write(nonce)
 
 	hash := h.Sum(nil)
 	return new(big.Int).SetBytes(hash)
 }
 
-// CalculateAddress derives an address from a secret using SHA256
-// Domain: "lockbox-address-v1"
+// CalculateAddress derives an address from a secret using MiMC
+// Uses MiMC hash to be consistent with the ZKP circuit which also uses MiMC
 func CalculateAddress(secret []byte) *big.Int {
-	h := sha256.New()
+	h := mimcHash.NewMiMC()
 
-	// Domain separator
-	h.Write([]byte("lockbox-address-v1"))
-
-	// Length-prefix input
-	writeLengthPrefixed(h, secret)
+	// Write data in same order as circuit (zkp.go:85)
+	h.Write(secret)
 
 	hash := h.Sum(nil)
 	return new(big.Int).SetBytes(hash)
 }
 
-// CalculateUnlockCommitment creates a commitment for unlock verification using SHA256
-// Domain: "lockbox-unlock-v1"
+// CalculateUnlockCommitment creates a commitment for unlock verification using MiMC
+// Uses MiMC hash to be consistent with the ZKP circuit which also uses MiMC
 func CalculateUnlockCommitment(unlockSecret, assetID, additionalData []byte) *big.Int {
-	h := sha256.New()
+	h := mimcHash.NewMiMC()
 
-	// Domain separator
-	h.Write([]byte("lockbox-unlock-v1"))
-
-	// Length-prefix inputs
-	writeLengthPrefixed(h, unlockSecret)
-	writeLengthPrefixed(h, assetID)
-	writeLengthPrefixed(h, additionalData)
+	// Write data in same order as circuit (zkp.go:117-119)
+	h.Write(unlockSecret)
+	h.Write(assetID)
+	h.Write(additionalData)
 
 	hash := h.Sum(nil)
 	return new(big.Int).SetBytes(hash)

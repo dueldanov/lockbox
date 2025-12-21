@@ -100,3 +100,55 @@ func (sm *StorageManager) deserializeLockedAsset(data []byte) (*LockedAsset, err
 	}
 	return &asset, nil
 }
+
+// StoreMultiSigConfig stores a multi-sig configuration
+func (sm *StorageManager) StoreMultiSigConfig(config *MultiSigConfig) error {
+	key := sm.multiSigKey(config.ID)
+	value, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+	return sm.store.Set(key, value)
+}
+
+// GetMultiSigConfig retrieves a multi-sig configuration
+func (sm *StorageManager) GetMultiSigConfig(multiSigID string) (*MultiSigConfig, error) {
+	key := sm.multiSigKey(multiSigID)
+	value, err := sm.store.Get(key)
+	if err != nil {
+		return nil, err
+	}
+
+	var config MultiSigConfig
+	if err := json.Unmarshal(value, &config); err != nil {
+		return nil, err
+	}
+	return &config, nil
+}
+
+func (sm *StorageManager) multiSigKey(multiSigID string) []byte {
+	ms := marshalutil.New(1 + len(multiSigID))
+	ms.WriteByte(StorePrefixMultiSig)
+	ms.WriteBytes([]byte(multiSigID))
+	return ms.Bytes()
+}
+
+// StoreShard stores a shard with the given key and value
+func (sm *StorageManager) StoreShard(key string, value []byte) error {
+	return sm.store.Set([]byte(key), value)
+}
+
+// GetShard retrieves a shard by key
+func (sm *StorageManager) GetShard(key string) ([]byte, error) {
+	return sm.store.Get([]byte(key))
+}
+
+// StoreOwnershipProof stores an ownership proof
+func (sm *StorageManager) StoreOwnershipProof(key string, value []byte) error {
+	return sm.store.Set([]byte(key), value)
+}
+
+// GetOwnershipProof retrieves an ownership proof by key
+func (sm *StorageManager) GetOwnershipProof(key string) ([]byte, error) {
+	return sm.store.Get([]byte(key))
+}

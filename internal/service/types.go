@@ -3,46 +3,32 @@ package service
 import (
 	"time"
 
+	"github.com/dueldanov/lockbox/v2/internal/interfaces"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 
-// Tier represents the service tier level
-type Tier int
+// Type aliases from interfaces package to avoid duplication
+// These types are defined in interfaces to break import cycles with verification
+
+type Tier = interfaces.Tier
 
 const (
-	TierBasic Tier = iota
-	TierStandard
-	TierPremium
-	TierElite
+	TierBasic    = interfaces.TierBasic
+	TierStandard = interfaces.TierStandard
+	TierPremium  = interfaces.TierPremium
+	TierElite    = interfaces.TierElite
 )
 
-// LockedAsset represents an asset that has been locked
-type LockedAsset struct {
-	ID              string              `json:"id"`
-	OwnerAddress    iotago.Address      `json:"owner_address"`
-	OutputID        iotago.OutputID     `json:"output_id"`
-	Amount          uint64              `json:"amount"`
-	TokenID         *iotago.NativeTokenID `json:"token_id,omitempty"`
-	LockTime        time.Time           `json:"lock_time"`
-	UnlockTime      time.Time           `json:"unlock_time"`
-	LockScript      string              `json:"lock_script"`
-	MultiSigAddresses []iotago.Address  `json:"multi_sig_addresses,omitempty"`
-	MinSignatures   int                 `json:"min_signatures,omitempty"`
-	Status          AssetStatus         `json:"status"`
-	CreatedAt       time.Time           `json:"created_at"`
-	UpdatedAt       time.Time           `json:"updated_at"`
-	EmergencyUnlock bool                `json:"emergency_unlock"`
-}
+type LockedAsset = interfaces.LockedAsset
 
-// AssetStatus represents the current status of a locked asset
-type AssetStatus string
+type AssetStatus = interfaces.AssetStatus
 
 const (
-	AssetStatusLocked    AssetStatus = "locked"
-	AssetStatusUnlocking AssetStatus = "unlocking"
-	AssetStatusUnlocked  AssetStatus = "unlocked"
-	AssetStatusExpired   AssetStatus = "expired"
-	AssetStatusEmergency AssetStatus = "emergency"
+	AssetStatusLocked    = interfaces.AssetStatusLocked
+	AssetStatusUnlocking = interfaces.AssetStatusUnlocking
+	AssetStatusUnlocked  = interfaces.AssetStatusUnlocked
+	AssetStatusExpired   = interfaces.AssetStatusExpired
+	AssetStatusEmergency = interfaces.AssetStatusEmergency
 )
 
 // ServiceConfig holds the configuration for the LockBox service

@@ -8,14 +8,43 @@ import (
 	"time"
 
 	"github.com/dueldanov/lockbox/v2/internal/crypto"
+	"github.com/dueldanov/lockbox/v2/internal/interfaces"
 	"github.com/dueldanov/lockbox/v2/internal/lockscript"
 	"github.com/iotaledger/hive.go/app/configuration"
 	appLogger "github.com/iotaledger/hive.go/app/logger"
 	"github.com/iotaledger/hive.go/kvstore/mapdb"
 	"github.com/iotaledger/hive.go/logger"
-	"github.com/stretchr/testify/require"
 	iotago "github.com/iotaledger/iota.go/v3"
+	"github.com/stretchr/testify/require"
 )
+
+// MockZKPProvider implements interfaces.ZKPProvider for testing
+// Returns deterministic mock proofs without actual ZKP computation
+type MockZKPProvider struct{}
+
+func (m *MockZKPProvider) GenerateOwnershipProof(assetID []byte, ownerSecret []byte) (*interfaces.OwnershipProof, error) {
+	return &interfaces.OwnershipProof{
+		AssetCommitment: assetID,       // Mock: use assetID as commitment
+		OwnerAddress:    ownerSecret,   // Mock: use secret as address
+		Timestamp:       time.Now().Unix(),
+	}, nil
+}
+
+func (m *MockZKPProvider) VerifyOwnershipProof(proof *interfaces.OwnershipProof) error {
+	return nil // Always valid in tests
+}
+
+func (m *MockZKPProvider) GenerateUnlockProof(unlockSecret, assetID, additionalData []byte, unlockTime int64) (*interfaces.UnlockProof, error) {
+	return &interfaces.UnlockProof{
+		UnlockCommitment: assetID,
+		UnlockTime:       unlockTime,
+		CurrentTime:      time.Now().Unix(),
+	}, nil
+}
+
+func (m *MockZKPProvider) VerifyUnlockProof(proof *interfaces.UnlockProof) error {
+	return nil // Always valid in tests
+}
 
 var initLoggerOnce sync.Once
 
@@ -71,7 +100,7 @@ func TestUnlockAsset(t *testing.T) {
 func TestScriptCompilation(t *testing.T) {
 	engine := lockscript.NewEngine(nil, 65536, 5*time.Second)
 	// Simple time-lock script
-	script := `after(1700000000)`
+	script := `after(1700000000);`
 	compiled, err := engine.CompileScript(context.Background(), script)
 	require.NoError(t, err)
 	require.NotNil(t, compiled)
@@ -99,6 +128,20 @@ func setupTestService(t *testing.T) *Service {
 
 	zkpManager := crypto.NewZKPManager()
 
+	// Add HKDF manager
+	hkdfManager, err := crypto.NewHKDFManager(masterKey)
+	require.NoError(t, err)
+
+	// Add decoy generator with Basic tier config (0.5 ratio)
+	decoyConfig := crypto.DecoyConfig{
+		DecoyRatio:         0.5,
+		MetadataDecoyRatio: 0.0,
+	}
+	decoyGenerator := crypto.NewDecoyGenerator(hkdfManager, decoyConfig)
+
+	// Add shard mixer
+	shardMixer := crypto.NewShardMixer()
+
 	// Create in-memory storage for testing using mapdb
 	memStore := mapdb.NewMapDB()
 
@@ -116,6 +159,10 @@ func setupTestService(t *testing.T) *Service {
 		},
 		shardEncryptor: shardEncryptor,
 		zkpManager:     zkpManager,
+		zkpProvider:    &MockZKPProvider{}, // Use mock for tests - avoids gnark constraint issues
+		hkdfManager:    hkdfManager,
+		decoyGenerator: decoyGenerator,
+		shardMixer:     shardMixer,
 		lockedAssets:   make(map[string]*LockedAsset),
 		pendingUnlocks: make(map[string]time.Time),
 		storageManager: storageMgr,

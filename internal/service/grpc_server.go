@@ -217,9 +217,35 @@ func (s *GRPCServer) ListAssets(req *pb.ListAssetsRequest, stream pb.LockBoxServ
 }
 
 // CreateMultiSig implements the gRPC method
-// TODO: Implement in Phase 3 when CreateMultiSig is added to Service
 func (s *GRPCServer) CreateMultiSig(ctx context.Context, req *pb.CreateMultiSigRequest) (*pb.CreateMultiSigResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "CreateMultiSig not yet implemented")
+	// Parse addresses
+	var addresses []iotago.Address
+	for _, addrStr := range req.Addresses {
+		_, addr, err := iotago.ParseBech32(addrStr)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid address: %v", err)
+		}
+		addresses = append(addresses, addr)
+	}
+
+	// Call service
+	config, err := s.service.CreateMultiSig(ctx, addresses, int(req.MinSignatures))
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create multi-sig: %v", err)
+	}
+
+	// Generate combined address representation
+	// For simplicity, return the first address as the multi-sig address
+	// In production, this would be a proper aggregated address
+	var multiSigAddress string
+	if len(config.Addresses) > 0 {
+		multiSigAddress = config.Addresses[0].Bech32(iotago.PrefixMainnet)
+	}
+
+	return &pb.CreateMultiSigResponse{
+		MultiSigId: config.ID,
+		Address:    multiSigAddress,
+	}, nil
 }
 
 // EmergencyUnlock implements the gRPC method
