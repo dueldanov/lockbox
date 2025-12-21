@@ -2,18 +2,33 @@ package verification
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/dueldanov/lockbox/v2/internal/interfaces"
+	"github.com/iotaledger/hive.go/app/configuration"
+	appLogger "github.com/iotaledger/hive.go/app/logger"
+	"github.com/iotaledger/hive.go/logger"
 	"github.com/stretchr/testify/require"
-	"github.com/dueldanov/lockbox/v2/internal/service"
-	iotago "github.com/iotaledger/iota.go/v3"
 )
+
+var initLoggerOnce sync.Once
+
+// initTestLogger initializes the global logger for tests
+func initTestLogger() {
+	initLoggerOnce.Do(func() {
+		cfg := configuration.New()
+		// Ignore error - global logger may already be initialized
+		_ = appLogger.InitGlobalLogger(cfg)
+	})
+}
 
 // TestNodeSelection tests the selection of nodes for verification based on tier.
 func TestNodeSelection(t *testing.T) {
 	selector := setupTestNodeSelector(t)
-	nodes, err := selector.SelectNodes(context.Background(), lockbox.TierStandard, []string{"us-east", "eu-west"})
+	nodes, err := selector.SelectNodes(context.Background(), interfaces.TierStandard, []string{"us-east", "eu-west"})
 	require.NoError(t, err)
 	require.Len(t, nodes, 3) // Standard tier requires 3 nodes
 	regions := make(map[string]bool)
@@ -25,6 +40,7 @@ func TestNodeSelection(t *testing.T) {
 
 // TestTokenRotation tests token rotation functionality.
 func TestTokenRotation(t *testing.T) {
+	initTestLogger()
 	tokenMgr := NewTokenManager(logger.NewLogger("test"), time.Second, 5*time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -46,6 +62,7 @@ func TestTokenRotation(t *testing.T) {
 
 // TestRetryMechanism tests the retry mechanism for verification failures.
 func TestRetryMechanism(t *testing.T) {
+	initTestLogger()
 	retryMgr := NewRetryManager(logger.NewLogger("test"), DefaultRetryConfig())
 	attempts := 0
 	err := retryMgr.RetryWithBackoff(context.Background(), "test-retry", func(ctx context.Context) error {
@@ -61,6 +78,7 @@ func TestRetryMechanism(t *testing.T) {
 
 // setupTestNodeSelector sets up a test node selector with mock nodes.
 func setupTestNodeSelector(t *testing.T) *NodeSelector {
+	initTestLogger()
 	selector := NewNodeSelector(logger.NewLogger("test"))
 	// Add mock nodes for different regions
 	helper := &VerificationTestHelper{}
@@ -72,4 +90,21 @@ func setupTestNodeSelector(t *testing.T) *NodeSelector {
 		require.NoError(t, err)
 	}
 	return selector
+}
+
+// VerificationTestHelper helps create test nodes for verification tests
+type VerificationTestHelper struct {
+	nodes []*VerificationNode
+}
+
+// AddNode adds a test node with given region, reliability and latency
+func (h *VerificationTestHelper) AddNode(region string, reliability int, latency time.Duration) {
+	h.nodes = append(h.nodes, &VerificationNode{
+		ID:         region + "-node",
+		Region:     region,
+		Capacity:   100,
+		Latency:    latency,
+		Reputation: float64(reliability) / 100.0,
+		Available:  true,
+	})
 }
