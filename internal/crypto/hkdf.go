@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"context"
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
@@ -9,9 +10,11 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
-	"golang.org/x/crypto/hkdf"
+	"github.com/dueldanov/lockbox/v2/internal/logging"
 	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/hkdf"
 )
 
 var (
@@ -71,7 +74,7 @@ func NewHKDFManager(masterKey []byte) (*HKDFManager, error) {
 }
 
 // DeriveKey derives a new key from the master key using HKDF
-func (h *HKDFManager) DeriveKey(context []byte) ([]byte, error) {
+func (h *HKDFManager) DeriveKey(hkdfContext []byte) ([]byte, error) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -80,8 +83,8 @@ func (h *HKDFManager) DeriveKey(context []byte) ([]byte, error) {
 	defer h.derivedKeysPool.Put(derivedKey)
 
 	// Create HKDF reader
-	hkdfReader := hkdf.New(sha256.New, h.masterKey, h.salt, append([]byte(HKDFInfoString), context...))
-	
+	hkdfReader := hkdf.New(sha256.New, h.masterKey, h.salt, append([]byte(HKDFInfoString), hkdfContext...))
+
 	// Derive key
 	if _, err := io.ReadFull(hkdfReader, derivedKey); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrKeyDerivationFailed, err)
@@ -90,8 +93,17 @@ func (h *HKDFManager) DeriveKey(context []byte) ([]byte, error) {
 	// Return a copy of the derived key
 	result := make([]byte, len(derivedKey))
 	copy(result, derivedKey)
-	
+
 	return result, nil
+}
+
+// DeriveKeyWithContext derives a key with logging support
+func (h *HKDFManager) DeriveKeyWithContext(ctx context.Context, hkdfContext []byte) ([]byte, error) {
+	start := time.Now()
+	key, err := h.DeriveKey(hkdfContext)
+	logging.LogFromContextWithDuration(ctx, logging.PhaseKeyDerivation, "DeriveHKDFKey",
+		fmt.Sprintf("contextLen=%d", len(hkdfContext)), time.Since(start), err)
+	return key, err
 }
 
 // DeriveKeyForShard derives a key specifically for a shard

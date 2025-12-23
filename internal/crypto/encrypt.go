@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dueldanov/lockbox/v2/internal/logging"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
@@ -112,6 +114,15 @@ func (e *ShardEncryptor) EncryptData(data []byte) ([]*CharacterShard, error) {
 	return shards, nil
 }
 
+// EncryptDataWithContext encrypts data with logging support
+func (e *ShardEncryptor) EncryptDataWithContext(ctx context.Context, data []byte) ([]*CharacterShard, error) {
+	start := time.Now()
+	shards, err := e.EncryptData(data)
+	logging.LogFromContextWithDuration(ctx, logging.PhaseEncryption, "EncryptData",
+		fmt.Sprintf("dataLen=%d, shardCount=%d", len(data), len(shards)), time.Since(start), err)
+	return shards, err
+}
+
 // encryptShard encrypts a single shard
 func (e *ShardEncryptor) encryptShard(data []byte, shardID uint32, index uint32, total uint32) (*CharacterShard, error) {
 	// Derive key for this shard
@@ -211,6 +222,15 @@ func (e *ShardEncryptor) DecryptShards(shards []*CharacterShard) ([]byte, error)
 	}
 
 	return decryptedData, nil
+}
+
+// DecryptShardsWithContext decrypts shards with logging support
+func (e *ShardEncryptor) DecryptShardsWithContext(ctx context.Context, shards []*CharacterShard) ([]byte, error) {
+	start := time.Now()
+	data, err := e.DecryptShards(shards)
+	logging.LogFromContextWithDuration(ctx, logging.PhaseShardDecryption, "DecryptShards",
+		fmt.Sprintf("shardCount=%d, dataLen=%d", len(shards), len(data)), time.Since(start), err)
+	return data, err
 }
 
 // decryptShard decrypts a single shard

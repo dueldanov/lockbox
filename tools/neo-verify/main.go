@@ -24,30 +24,70 @@ import (
 )
 
 var (
-	tierFlag    = flag.String("tier", "Standard", "Service tier: Basic, Standard, Premium, Elite")
-	outputFlag  = flag.String("output", "neo_verification.json", "Output JSON file for NEO")
-	verboseFlag = flag.Bool("verbose", true, "Print verbose output")
+	tierFlag     = flag.String("tier", "Standard", "Service tier: Basic, Standard, Premium, Elite")
+	workflowFlag = flag.String("workflow", "storeKey", "Workflow: storeKey, retrieveKey, deleteKey, rotateKey, all")
+	outputFlag   = flag.String("output", "", "Output JSON file (default: {workflow}_verification.json)")
+	outputDir    = flag.String("output-dir", "/tmp", "Output directory for 'all' workflow")
+	verboseFlag  = flag.Bool("verbose", true, "Print verbose output")
 )
 
 func main() {
 	flag.Parse()
 
-	fmt.Println("=== NEO Verification Tool for LockBox ===")
-	fmt.Println("=== 100 Functions / 11 Phases ===")
-	fmt.Printf("Tier: %s\n", *tierFlag)
-	fmt.Printf("Output: %s\n", *outputFlag)
-	fmt.Println()
-
 	// Parse tier
 	tier := parseTier(*tierFlag)
 
-	// Run storeKey workflow (100 functions)
-	fmt.Println(">>> Running storeKey Workflow (100 functions)...")
-	logger := NewNEOLogger("storeKey", *tierFlag)
+	// Handle 'all' workflow
+	if *workflowFlag == "all" {
+		fmt.Println("=== NEO Verification Tool for LockBox ===")
+		fmt.Println("=== Running ALL 496 Functions ===")
+		fmt.Printf("Tier: %s\n", *tierFlag)
+		fmt.Printf("Output Dir: %s\n", *outputDir)
 
-	err := runStoreKeyWorkflow(logger, tier)
+		err := runAllWorkflows(tier, *outputDir)
+		if err != nil {
+			fmt.Printf("Workflow failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Determine output file
+	output := *outputFlag
+	if output == "" {
+		output = fmt.Sprintf("%s_verification.json", *workflowFlag)
+	}
+
+	fmt.Println("=== NEO Verification Tool for LockBox ===")
+	fmt.Printf("Workflow: %s\n", *workflowFlag)
+	fmt.Printf("Tier: %s\n", *tierFlag)
+	fmt.Printf("Output: %s\n", output)
+	fmt.Println()
+
+	logger := NewNEOLogger(*workflowFlag, *tierFlag)
+	var err error
+
+	switch *workflowFlag {
+	case "storeKey":
+		fmt.Println(">>> Running storeKey Workflow (100 functions / 11 phases)...")
+		err = runStoreKeyWorkflow(logger, tier)
+	case "retrieveKey":
+		fmt.Println(">>> Running retrieveKey Workflow (200 functions / 14 phases)...")
+		err = runRetrieveKeyWorkflow(logger, tier)
+	case "deleteKey":
+		fmt.Println(">>> Running deleteKey Workflow (70 functions / 9 phases)...")
+		err = runDeleteKeyWorkflow(logger, tier)
+	case "rotateKey":
+		fmt.Println(">>> Running rotateKey Workflow (126 functions / 12 phases)...")
+		err = runRotateKeyWorkflow(logger, tier)
+	default:
+		fmt.Printf("Unknown workflow: %s\n", *workflowFlag)
+		fmt.Println("Available: storeKey, retrieveKey, deleteKey, rotateKey, all")
+		os.Exit(1)
+	}
+
 	if err != nil {
-		fmt.Printf("storeKey workflow failed: %v\n", err)
+		fmt.Printf("Workflow failed: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -55,13 +95,13 @@ func main() {
 
 	// Write output
 	fmt.Println("\n>>> Writing NEO report...")
-	err = writeReport(*outputFlag, logger)
+	err = writeReport(output, logger)
 	if err != nil {
 		fmt.Printf("Failed to write report: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("\n\033[32mSuccess!\033[0m Report written to: %s\n", *outputFlag)
+	fmt.Printf("\n\033[32mSuccess!\033[0m Report written to: %s\n", output)
 	fmt.Printf("Total functions logged: %d\n", logger.stepNum)
 }
 

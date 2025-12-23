@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -15,6 +16,8 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 	"github.com/consensys/gnark/std/hash/mimc"
+
+	"github.com/dueldanov/lockbox/v2/internal/logging"
 )
 
 var (
@@ -208,6 +211,15 @@ func (z *ZKPManager) GenerateOwnershipProof(assetID []byte, ownerSecret []byte) 
 	}, nil
 }
 
+// GenerateOwnershipProofWithContext generates proof with logging support
+func (z *ZKPManager) GenerateOwnershipProofWithContext(ctx context.Context, assetID []byte, ownerSecret []byte) (*OwnershipProof, error) {
+	start := time.Now()
+	proof, err := z.GenerateOwnershipProof(assetID, ownerSecret)
+	logging.LogFromContextWithDuration(ctx, logging.PhaseZKP, "GenerateOwnershipProof",
+		fmt.Sprintf("assetIDLen=%d", len(assetID)), time.Since(start), err)
+	return proof, err
+}
+
 // VerifyOwnershipProof verifies an ownership proof
 func (z *ZKPManager) VerifyOwnershipProof(proof *OwnershipProof) error {
 	circuitID := "ownership"
@@ -239,6 +251,15 @@ func (z *ZKPManager) VerifyOwnershipProof(proof *OwnershipProof) error {
 	}
 
 	return nil
+}
+
+// VerifyOwnershipProofWithContext verifies proof with logging support
+func (z *ZKPManager) VerifyOwnershipProofWithContext(ctx context.Context, proof *OwnershipProof) error {
+	start := time.Now()
+	err := z.VerifyOwnershipProof(proof)
+	logging.LogFromContextWithDuration(ctx, logging.PhaseZKP, "VerifyOwnershipProof",
+		fmt.Sprintf("commitmentLen=%d", len(proof.AssetCommitment)), time.Since(start), err)
+	return err
 }
 
 // GenerateUnlockProof generates a proof for unlock conditions

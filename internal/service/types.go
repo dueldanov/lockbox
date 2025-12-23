@@ -46,6 +46,10 @@ type ServiceConfig struct {
 	EmergencyDelayDays    int
 	MultiSigRequired      bool
 	MinMultiSigSigners    int
+
+	// Logging configuration for AI verification
+	EnableStructuredLogging bool   // Enable JSON logging for AI verification
+	LogOutputDir            string // Directory for JSON log files (default: DataDir/logs)
 }
 
 // LockAssetRequest represents a request to lock an asset
@@ -95,4 +99,40 @@ type VaultInfo struct {
 	Owner     iotago.Address
 	CreatedAt time.Time
 	Keys      []string
+}
+
+// DeleteKeyRequest represents a request to permanently destroy a key
+type DeleteKeyRequest struct {
+	BundleID    string   // Bundle to destroy
+	AccessToken string   // Single-use API key
+	Nonce       string   // Nonce for authentication (5 min window)
+	Signatures  [][]byte // Optional multi-sig for Premium/Elite tiers
+}
+
+// DeleteKeyResponse represents the response from key destruction
+type DeleteKeyResponse struct {
+	BundleID        string    // Destroyed bundle ID
+	RequestID       string    // Destruction request UUID
+	DestroyedAt     time.Time // When destruction completed
+	ShardsDestroyed int       // Total shards destroyed (real + decoy)
+	NodesConfirmed  int       // Number of nodes that confirmed destruction
+	Status          string    // DESTROYED or FAILED
+}
+
+// RotateKeyRequest represents a request to rotate encryption keys
+type RotateKeyRequest struct {
+	BundleID    string   // Bundle to rotate
+	AccessToken string   // Single-use API key
+	Nonce       string   // Nonce for authentication
+	Signatures  [][]byte // Optional multi-sig for Premium/Elite tiers
+}
+
+// RotateKeyResponse represents the response from key rotation
+type RotateKeyResponse struct {
+	BundleID       string    // Bundle ID (unchanged)
+	NewVersion     int       // New version number
+	RotatedAt      time.Time // When rotation completed
+	ShardsRotated  int       // Number of shards re-encrypted
+	NodesUpdated   int       // Nodes with updated shards
+	Status         string    // ROTATED or FAILED
 }
