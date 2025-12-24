@@ -92,6 +92,48 @@ An overview of all configuration parameters can be found [here.](configuration.m
 
 ---
 
+## Testing
+
+### Run All Tests
+
+```bash
+# Run all tests
+go test ./... -v
+
+# Run specific package tests
+go test ./internal/lockscript/... -v
+go test ./internal/service/... -v
+go test ./internal/crypto/... -v
+```
+
+### LockScript Testing
+
+LockScript is a DSL for defining unlock conditions. Test the key operations:
+
+```bash
+# Build the CLI tool
+go build -o /tmp/lockscript-test ./tools/lockscript-test
+
+# Store a key
+/tmp/lockscript-test -store "my-secret-key:Standard" -json
+
+# Derive a key
+/tmp/lockscript-test -derive "shard-encrypt:0" -json
+
+# List available functions
+/tmp/lockscript-test -list
+```
+
+### Test Coverage
+
+```bash
+# Generate coverage report
+go test ./internal/... -coverprofile=coverage.out
+go tool cover -html=coverage.out
+```
+
+---
+
 ## Differences from IOTA HORNET
 
 This fork includes:
@@ -99,6 +141,9 @@ This fork includes:
 - Binary name: `lockbox-node` (instead of `hornet`)
 - Devnet configuration for isolated testing
 - LockBox branding in logs and CLI
+- **LockScript DSL** for programmable unlock conditions
+- **Key Operations**: storeKey, getKey, rotate, deriveKey
+- **Cryptographic features**: HKDF key derivation, ChaCha20-Poly1305 encryption
 
 All protocol logic, consensus mechanisms, and tangle internals remain unchanged from HORNET v2.0.2.
 

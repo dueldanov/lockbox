@@ -1093,6 +1093,24 @@ func (s *Service) UnlockAsset(ctx context.Context, req *UnlockAssetRequest) (*Un
 	}
 
 	// =========================================================================
+	// PHASE 7.5: LockScript Execution (if present)
+	// =========================================================================
+	stepStart = time.Now()
+	if asset.LockScript != "" {
+		if err := s.executeLockScript(ctx, asset, req.UnlockParams); err != nil {
+			log.LogStepWithDuration(logging.PhaseBundleRetrieval, "execute_lockscript",
+				fmt.Sprintf("script=%q, FAILED", asset.LockScript[:min(50, len(asset.LockScript))]),
+				time.Since(stepStart), err)
+			return nil, fmt.Errorf("unlock condition not met: %w", err)
+		}
+		log.LogStepWithDuration(logging.PhaseBundleRetrieval, "execute_lockscript",
+			"scriptExecution=success", time.Since(stepStart), nil)
+	} else {
+		log.LogStepWithDuration(logging.PhaseBundleRetrieval, "execute_lockscript",
+			"scriptExecution=skipped (no script)", time.Since(stepStart), nil)
+	}
+
+	// =========================================================================
 	// PHASE 8: Parallel Shard Fetching (22 functions)
 	// =========================================================================
 
@@ -1953,4 +1971,74 @@ func (s *Service) verifyMultiSigSignatures(assetID string, signatures [][]byte, 
 	}
 
 	return validCount, nil
+}
+
+// executeLockScript executes the LockScript for an asset unlock
+// Returns nil if script is empty or passes, error if script fails
+func (s *Service) executeLockScript(ctx context.Context, asset *LockedAsset, params map[string]interface{}) error {
+	// If no script, unlock is allowed (time-based only)
+	if asset.LockScript == "" {
+		return nil
+	}
+
+	// Get the script compiler engine
+	engine, ok := s.scriptCompiler.(*lockscript.Engine)
+	if !ok || engine == nil {
+		// If compiler not initialized, skip script execution
+		// This maintains backward compatibility
+		s.LogWarn("LockScript compiler not initialized, skipping script execution")
+		return nil
+	}
+
+	// Compile the script
+	compiled, err := engine.CompileScript(ctx, asset.LockScript)
+	if err != nil {
+		return fmt.Errorf("failed to compile LockScript: %w", err)
+	}
+
+	// Create environment with built-in variables
+	env := lockscript.NewEnvironment()
+
+	// Add asset-related variables
+	env.Variables["asset_id"] = asset.ID
+	if asset.OwnerAddress != nil {
+		env.Variables["owner_address"] = asset.OwnerAddress.String()
+	} else {
+		env.Variables["owner_address"] = ""
+	}
+	env.Variables["lock_time"] = asset.LockTime.Unix()
+	env.Variables["unlock_time"] = asset.UnlockTime.Unix()
+	env.Variables["current_time"] = time.Now().Unix()
+
+	// Add user-provided parameters (e.g., signature, message)
+	for k, v := range params {
+		env.Variables[k] = v
+	}
+
+	// Execute the script
+	result, err := engine.ExecuteScript(ctx, compiled, env)
+	if err != nil {
+		return fmt.Errorf("LockScript execution failed: %w", err)
+	}
+
+	// Check result - must be true for unlock to proceed
+	if !result.Success {
+		return fmt.Errorf("LockScript returned failure")
+	}
+
+	// If the script returns a value, it must be truthy
+	if result.Value != nil {
+		switch v := result.Value.(type) {
+		case bool:
+			if !v {
+				return fmt.Errorf("LockScript condition not met")
+			}
+		case int64:
+			if v == 0 {
+				return fmt.Errorf("LockScript condition not met")
+			}
+		}
+	}
+
+	return nil
 }

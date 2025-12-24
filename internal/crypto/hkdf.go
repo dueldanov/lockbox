@@ -73,6 +73,34 @@ func NewHKDFManager(masterKey []byte) (*HKDFManager, error) {
 	return manager, nil
 }
 
+// NewHKDFManagerWithSalt creates a new HKDF manager with a provided salt
+// Use this to restore a manager with a previously saved salt
+func NewHKDFManagerWithSalt(masterKey []byte, salt []byte) (*HKDFManager, error) {
+	if len(masterKey) != HKDFKeySize {
+		return nil, fmt.Errorf("%w: expected %d, got %d", ErrInvalidKeySize, HKDFKeySize, len(masterKey))
+	}
+
+	if len(salt) != HKDFSaltSize {
+		return nil, fmt.Errorf("%w: expected %d, got %d", ErrInvalidSaltSize, HKDFSaltSize, len(salt))
+	}
+
+	// Create manager with properly allocated key and salt
+	manager := &HKDFManager{
+		masterKey: make([]byte, len(masterKey)),
+		salt:      make([]byte, len(salt)),
+		derivedKeysPool: sync.Pool{
+			New: func() interface{} {
+				return make([]byte, HKDFKeySize)
+			},
+		},
+	}
+
+	copy(manager.masterKey, masterKey)
+	copy(manager.salt, salt)
+
+	return manager, nil
+}
+
 // DeriveKey derives a new key from the master key using HKDF
 func (h *HKDFManager) DeriveKey(hkdfContext []byte) ([]byte, error) {
 	h.mu.RLock()
@@ -247,6 +275,31 @@ func NewHKDFEncryptor(masterKey []byte) (*HKDFEncryptor, error) {
 		hkdfManager: manager,
 		aead:        aead,
 	}, nil
+}
+
+// NewHKDFEncryptorWithSalt creates a new encryptor with a provided salt
+// Use this to restore an encryptor with a previously saved salt
+func NewHKDFEncryptorWithSalt(masterKey []byte, salt []byte) (*HKDFEncryptor, error) {
+	manager, err := NewHKDFManagerWithSalt(masterKey, salt)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create AEAD cipher
+	aead, err := chacha20poly1305.NewX(masterKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AEAD: %w", err)
+	}
+
+	return &HKDFEncryptor{
+		hkdfManager: manager,
+		aead:        aead,
+	}, nil
+}
+
+// GetSalt returns a copy of the current salt
+func (e *HKDFEncryptor) GetSalt() []byte {
+	return e.hkdfManager.GetSalt()
 }
 
 // EncryptWithContext encrypts data with a derived key based on context

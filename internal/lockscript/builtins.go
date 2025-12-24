@@ -73,7 +73,10 @@ func (e *Engine) RegisterBuiltinFunctions() {
             Handler: funcMax,
         },
     }
-    
+
+    // Add key operations builtins (storeKey, getKey, rotate, deriveKey, etc.)
+    builtins = append(builtins, GetKeyOperationsBuiltins()...)
+
     for _, fn := range builtins {
         e.RegisterFunction(fn.Name, &builtinFunctionWrapper{fn})
     }
