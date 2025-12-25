@@ -196,3 +196,65 @@ func TestVerifySignature_WrongSignatureSize(t *testing.T) {
 	result := v.VerifySignature(message, wrongSizeSignature, pubKey)
 	require.False(t, result, "Wrong size signature should fail")
 }
+
+// ============================================
+// Token Replay Tests (SECURITY_TESTING.md compliance)
+// ============================================
+
+// TestTokenManager_AfterGracePeriod tests that old tokens are invalid after grace period
+func TestTokenManager_AfterGracePeriod(t *testing.T) {
+	initTestLogger()
+
+	// Create token manager with very short rotation and validity for testing
+	// rotationInterval = 100ms, tokenValidity = 200ms
+	tokenMgr := NewTokenManager(logger.NewLogger("test"), 100*time.Millisecond, 200*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go tokenMgr.Start(ctx)
+
+	// Wait for initial token generation
+	time.Sleep(50 * time.Millisecond)
+	initialToken := tokenMgr.GetCurrentToken()
+	require.NotNil(t, initialToken, "Initial token should be generated")
+
+	// Wait for rotation + grace period expiry (100ms rotation + 200ms validity + buffer)
+	time.Sleep(350 * time.Millisecond)
+
+	// Old token should now be invalid (past grace period)
+	valid := tokenMgr.ValidateToken(initialToken.ID)
+	require.False(t, valid, "SECURITY: Old token after grace period MUST be invalid!")
+
+	// New token should be valid
+	newToken := tokenMgr.GetCurrentToken()
+	require.NotNil(t, newToken, "New token should exist")
+	require.NotEqual(t, initialToken.ID, newToken.ID, "Token should have rotated")
+	require.True(t, tokenMgr.ValidateToken(newToken.ID), "Current token should be valid")
+}
+
+// TestTokenManager_ReplayAttack tests that tokens cannot be replayed after rotation
+func TestTokenManager_ReplayAttack(t *testing.T) {
+	initTestLogger()
+
+	// Very short timers for testing
+	tokenMgr := NewTokenManager(logger.NewLogger("test"), 50*time.Millisecond, 100*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go tokenMgr.Start(ctx)
+
+	// Wait for initial token
+	time.Sleep(30 * time.Millisecond)
+	token1 := tokenMgr.GetCurrentToken()
+	require.NotNil(t, token1)
+
+	// Store the token ID for "replay"
+	stolenTokenID := token1.ID
+
+	// Wait for multiple rotations
+	time.Sleep(200 * time.Millisecond)
+
+	// Attempt to "replay" the old token - MUST fail
+	replayValid := tokenMgr.ValidateToken(stolenTokenID)
+	require.False(t, replayValid, "SECURITY: Replayed token MUST be rejected!")
+}

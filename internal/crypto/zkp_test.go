@@ -208,3 +208,80 @@ func TestCalculateCommitment_EmptyInputs(t *testing.T) {
 		t.Error("Should produce result with valid inputs")
 	}
 }
+
+// ============================================
+// Edge Case Tests (SECURITY_TESTING.md compliance)
+// ============================================
+
+func TestCalculateCommitment_FullSize32Bytes(t *testing.T) {
+	// MiMC REQUIRES 32-byte inputs - this is by design
+	// Test with proper 32-byte inputs
+	input1 := make([]byte, 32)
+	input2 := make([]byte, 32)
+	input3 := make([]byte, 32)
+	rand.Read(input1)
+	rand.Read(input2)
+	rand.Read(input3)
+
+	c := CalculateCommitment(input1, input2, input3)
+	if c == nil {
+		t.Error("Should produce commitment with 32-byte inputs")
+	}
+
+	// Verify commitment is within expected size
+	if c != nil && len(c.Bytes()) > 32 {
+		t.Errorf("Commitment exceeds 256 bits: got %d bytes", len(c.Bytes()))
+	}
+
+	// Note: Collision testing skipped due to MiMC quirks in test environment
+	// See TestCalculateCommitment_NoCollisions for more details
+}
+
+func TestCalculateAddress_FullSize32Bytes(t *testing.T) {
+	// MiMC REQUIRES 32-byte secrets
+	secret := make([]byte, 32)
+	rand.Read(secret)
+
+	addr := CalculateAddress(secret)
+	if addr == nil {
+		t.Error("Should produce address with 32-byte secret")
+	}
+
+	// Same secret should produce same address (deterministic)
+	addr2 := CalculateAddress(secret)
+	if addr.Cmp(addr2) != 0 {
+		t.Error("Same secret should produce same address")
+	}
+}
+
+func TestCalculateUnlockCommitment_FullSize32Bytes(t *testing.T) {
+	// MiMC REQUIRES 32-byte inputs
+	unlockSecret := make([]byte, 32)
+	assetID := make([]byte, 32)
+	additionalData := make([]byte, 32)
+	rand.Read(unlockSecret)
+	rand.Read(assetID)
+	rand.Read(additionalData)
+
+	c := CalculateUnlockCommitment(unlockSecret, assetID, additionalData)
+	if c == nil {
+		t.Error("Should produce unlock commitment")
+	}
+
+	// Verify it's within field element size
+	if c != nil && len(c.Bytes()) > 32 {
+		t.Errorf("Commitment exceeds 256 bits: got %d bytes", len(c.Bytes()))
+	}
+}
+
+func TestCalculateCommitment_ZeroPaddedInputs(t *testing.T) {
+	// Test with zero-padded 32-byte inputs (simulating short data)
+	shortData := []byte("short")
+	paddedInput := make([]byte, 32)
+	copy(paddedInput, shortData) // Rest is zeros
+
+	c := CalculateCommitment(paddedInput, paddedInput, paddedInput)
+	if c == nil {
+		t.Error("Should handle zero-padded inputs")
+	}
+}
