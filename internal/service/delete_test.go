@@ -1,6 +1,7 @@
 package service
 
 import (
+	"crypto/rand"
 	"fmt"
 	"testing"
 	"time"
@@ -9,7 +10,7 @@ import (
 )
 
 // ============================================
-// Token Validation Tests
+// Token Validation Tests (HMAC format: payload:hmac)
 // ============================================
 
 func TestValidateAccessToken_Empty(t *testing.T) {
@@ -26,26 +27,54 @@ func TestValidateAccessToken_TooShort(t *testing.T) {
 
 func TestValidateAccessToken_InvalidHex(t *testing.T) {
 	svc := &Service{}
-	// 64 chars but not valid hex
-	token := "ghijklmnopqrstuvwxyz123456789012345678901234567890123456789012"
+	// Invalid hex in payload
+	token := "ghijklmnopqrstuvwxyz12345678901234567890123456789012345678901234:0000000000000000000000000000000000000000000000000000000000000000"
 	result := svc.validateAccessToken(token)
 	require.False(t, result, "Invalid hex should be rejected")
 }
 
-func TestValidateAccessToken_Valid(t *testing.T) {
+func TestValidateAccessToken_LegacyFormatRejected(t *testing.T) {
 	svc := &Service{}
-	// Valid 64-char hex token (32 bytes)
+	// Legacy 64-char hex token without HMAC - MUST be rejected for security
 	token := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	result := svc.validateAccessToken(token)
-	require.True(t, result, "Valid hex token should be accepted")
+	require.False(t, result, "Legacy format without HMAC should be rejected")
 }
 
-func TestValidateAccessToken_ValidUppercase(t *testing.T) {
+func TestValidateAccessToken_Valid(t *testing.T) {
 	svc := &Service{}
-	// Valid uppercase hex
-	token := "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+	// Generate a valid HMAC-signed token
+	token, err := GenerateAccessToken()
+	require.NoError(t, err)
 	result := svc.validateAccessToken(token)
-	require.True(t, result, "Valid uppercase hex token should be accepted")
+	require.True(t, result, "Valid HMAC-signed token should be accepted")
+}
+
+func TestValidateAccessToken_InvalidHMAC(t *testing.T) {
+	svc := &Service{}
+	// Valid payload but wrong HMAC
+	token := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:0000000000000000000000000000000000000000000000000000000000000000"
+	result := svc.validateAccessToken(token)
+	require.False(t, result, "Token with invalid HMAC should be rejected")
+}
+
+func TestValidateAccessToken_TamperedPayload(t *testing.T) {
+	svc := &Service{}
+	// Generate valid token, then tamper with payload
+	token, err := GenerateAccessToken()
+	require.NoError(t, err)
+
+	// Tamper with first character of payload
+	tampered := "f" + token[1:]
+	result := svc.validateAccessToken(tampered)
+	require.False(t, result, "Tampered payload should be rejected")
+}
+
+func TestGenerateAccessToken_Format(t *testing.T) {
+	token, err := GenerateAccessToken()
+	require.NoError(t, err)
+	require.Contains(t, token, ":", "Token should have payload:hmac format")
+	require.Len(t, token, 129, "Token should be 64 + 1 + 64 = 129 chars")
 }
 
 // ============================================
@@ -109,15 +138,20 @@ func TestCheckTokenNonce_ReplayAttack(t *testing.T) {
 func TestCheckTokenNonce_LegacyFormat(t *testing.T) {
 	svc := &Service{}
 	// Legacy nonce without timestamp (at least 16 chars)
-	nonce := "legacy_nonce_1234567890"
+	// Use random suffix to avoid collision with persisted nonces
+	randomBytes := make([]byte, 8)
+	rand.Read(randomBytes)
+	nonce := fmt.Sprintf("legacy_nonce_%x", randomBytes)
 	result := svc.checkTokenNonce(nonce)
 	require.True(t, result, "Legacy nonce with sufficient length should be accepted")
 }
 
 func TestCheckTokenNonce_LegacyReplay(t *testing.T) {
 	svc := &Service{}
-	// Legacy nonce
-	nonce := "legacy_replay_test_1234"
+	// Legacy nonce with unique suffix
+	randomBytes := make([]byte, 8)
+	rand.Read(randomBytes)
+	nonce := fmt.Sprintf("legacy_replay_%x", randomBytes)
 
 	// First use should succeed
 	result1 := svc.checkTokenNonce(nonce)

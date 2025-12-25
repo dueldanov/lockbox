@@ -7,10 +7,31 @@ import (
 )
 
 func TestMiMCDirect(t *testing.T) {
-	// Note: MiMC from gnark-crypto has known issues with non-deterministic behavior
-	// in test environments. The actual ZKP circuits use MiMC correctly internally.
-	// This test verifies basic functionality but may be skipped if flaky.
-	t.Skip("MiMC has non-deterministic behavior in go test environment - skipping")
+	// SECURITY: Crypto tests MUST NOT be skipped!
+	// Use deterministic inputs to verify MiMC behaves correctly.
+
+	// Fixed 32-byte input (deterministic)
+	input := make([]byte, 32)
+	for i := range input {
+		input[i] = byte(i + 1) // 0x01, 0x02, ..., 0x20
+	}
+
+	// Calculate hash twice - MUST be identical
+	hash1 := CalculateAddress(input)
+	hash2 := CalculateAddress(input)
+
+	if hash1 == nil || hash2 == nil {
+		t.Fatal("MiMC returned nil for valid input")
+	}
+
+	if hash1.Cmp(hash2) != 0 {
+		t.Errorf("MiMC NOT DETERMINISTIC: %v != %v", hash1, hash2)
+	}
+
+	// Verify hash is non-zero (not a degenerate case)
+	if hash1.Sign() == 0 {
+		t.Log("Warning: MiMC produced zero hash - may indicate library issue")
+	}
 }
 
 func TestCalculateCommitment_NotReversible(t *testing.T) {
@@ -39,10 +60,38 @@ func TestCalculateCommitment_NotReversible(t *testing.T) {
 }
 
 func TestCalculateCommitment_NoCollisions(t *testing.T) {
-	// Note: MiMC from gnark-crypto has known issues with non-deterministic behavior
-	// in test environments. The actual ZKP circuits handle this correctly.
-	// Skipping due to flakiness - collision detection works in production.
-	t.Skip("MiMC has non-deterministic behavior in go test environment - skipping collision test")
+	// SECURITY: Crypto tests MUST NOT be skipped!
+	// Use deterministic inputs to verify collision resistance.
+
+	// Create two distinct 32-byte inputs
+	input1 := make([]byte, 32)
+	input2 := make([]byte, 32)
+	input3 := make([]byte, 32)
+
+	for i := range input1 {
+		input1[i] = byte(i + 1)   // 0x01, 0x02, ...
+		input2[i] = byte(i + 33)  // 0x21, 0x22, ...
+		input3[i] = byte(i + 65)  // 0x41, 0x42, ...
+	}
+
+	// Calculate two commitments with different inputs
+	c1 := CalculateCommitment(input1, input2, input3)
+
+	// Modify first input
+	input1Modified := make([]byte, 32)
+	copy(input1Modified, input1)
+	input1Modified[0] = 0xFF
+
+	c2 := CalculateCommitment(input1Modified, input2, input3)
+
+	if c1 == nil || c2 == nil {
+		t.Fatal("Commitment returned nil")
+	}
+
+	// Different inputs MUST produce different commitments
+	if c1.Cmp(c2) == 0 {
+		t.Error("SECURITY VIOLATION: Different inputs produced same commitment (collision)!")
+	}
 }
 
 func TestCalculateAddress_DomainSeparation(t *testing.T) {
@@ -76,28 +125,28 @@ func TestCalculateAddress_Deterministic(t *testing.T) {
 }
 
 func TestCalculateAddress_DifferentSecrets(t *testing.T) {
-	// Note: MiMC from gnark-crypto has known issues with non-deterministic behavior
-	// in test environments. The actual ZKP circuits use MiMC correctly internally.
-	// This test verifies collision resistance but may have occasional failures due to
-	// the underlying MiMC implementation quirks with random inputs.
+	// SECURITY: Different secrets MUST produce different addresses.
+	// Collision = SECURITY VIOLATION (attacker could impersonate owner)
 
-	// Generate distinct secrets manually to avoid any potential RNG issues
+	// Generate distinct secrets with deterministic patterns
 	secret1 := make([]byte, 32)
 	secret2 := make([]byte, 32)
 
-	// Fill with different deterministic patterns
 	for i := range secret1 {
-		secret1[i] = byte(i + 1)
-		secret2[i] = byte(i + 129) // Different pattern
+		secret1[i] = byte(i + 1)   // 0x01, 0x02, ...
+		secret2[i] = byte(i + 129) // 0x81, 0x82, ...
 	}
 
 	addr1 := CalculateAddress(secret1)
 	addr2 := CalculateAddress(secret2)
 
-	// With deterministic inputs, this should always pass
+	if addr1 == nil || addr2 == nil {
+		t.Fatal("CalculateAddress returned nil")
+	}
+
+	// Different secrets MUST produce different addresses
 	if addr1.Cmp(addr2) == 0 {
-		// This is very unlikely but possible with MiMC quirks
-		t.Skip("MiMC produced collision - known gnark-crypto quirk")
+		t.Error("SECURITY VIOLATION: Different secrets produced same address (collision)!")
 	}
 }
 
