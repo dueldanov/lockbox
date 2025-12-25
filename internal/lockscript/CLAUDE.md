@@ -31,7 +31,7 @@
 | `before(ts)` | int64 | true если time < ts |
 | `sha256(data)` | string | SHA256 хэш |
 | `verify_sig(pk, msg, sig)` | string×3 | Ed25519 verify |
-| `require_sigs(sigs, n)` | []sig, int | n-of-m подписи |
+| `require_sigs(pks, msg, sigs, n)` | []pk, string, []sig, int | Ed25519 m-of-n multi-sig |
 | `check_geo(loc)` | string | Проверка региона |
 | `min(a, b, ...)` | int... | Минимум |
 | `max(a, b, ...)` | int... | Максимум |
@@ -127,8 +127,8 @@ after(1700000000)
 // Time-lock + owner signature
 after(unlock_time) && verify_sig(owner, asset_id, signature)
 
-// Multi-sig (2-of-3)
-require_sigs(signatures, 2)
+// Multi-sig (2-of-3) - теперь с Ed25519 верификацией!
+require_sigs(pubkeys, message, signatures, 2)
 
 // Geo-restriction
 check_geo("us-east") || check_geo("eu-west")
@@ -136,7 +136,7 @@ check_geo("us-east") || check_geo("eu-west")
 // Complex condition
 after(unlock_time) && (
     verify_sig(owner, msg, sig) ||
-    require_sigs(emergency_sigs, 2)
+    require_sigs(emergency_pubkeys, msg, emergency_sigs, 2)
 )
 ```
 
@@ -157,19 +157,24 @@ go test -run TestSignMessage
 
 ## Важные детали
 
-1. **InitializeCompiler = заглушка**
-   - В `service.go:328` просто `return nil`
-   - TODO: интегрировать engine
+1. **InitializeCompiler реализован**
+   - Создает engine с builtins
+   - Интегрирован в service
 
-2. **LockScript не исполняется**
-   - В LockAsset сохраняется как строка
-   - В UnlockAsset не проверяется
-   - TODO: добавить execution в UnlockAsset
+2. **LockScript исполняется в UnlockAsset**
+   - `executeLockScript()` в `service.go`
+   - Компилирует и выполняет скрипт
+   - Проверяет условия unlock
 
-3. **125 функций в пакете**
+3. **require_sigs с Ed25519 верификацией**
+   - Сигнатура: `require_sigs(pubkeys[], message, signatures[], threshold)`
+   - Реальная криптографическая проверка каждой подписи
+   - Исправлен критический баг (раньше просто считал непустые строки)
+
+4. **125 функций в пакете**
    - Полноценный VM с control flow
    - Caching скомпилированных скриптов
 
-4. **Ed25519 НЕ secp256k1**
+5. **Ed25519 НЕ secp256k1**
    - IOTA использует Ed25519
    - Совместимо с iota.go
