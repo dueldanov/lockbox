@@ -3,11 +3,19 @@ package service
 import (
 	"crypto/rand"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func init() {
+	// Set dev mode for tests to allow deterministic HMAC key
+	os.Setenv("LOCKBOX_DEV_MODE", "true")
+	// Force reinit of HMAC key with dev mode enabled
+	reinitTokenHMACKey()
+}
 
 // ============================================
 // Token Validation Tests (HMAC format: payload:hmac)
@@ -75,6 +83,93 @@ func TestGenerateAccessToken_Format(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, token, ":", "Token should have payload:hmac format")
 	require.Len(t, token, 129, "Token should be 64 + 1 + 64 = 129 chars")
+}
+
+// ============================================
+// HMAC Key Security Tests
+// ============================================
+
+func TestLoadTokenHMACKey_PanicOnMissingKey(t *testing.T) {
+	// Save original values
+	origKey := os.Getenv("LOCKBOX_TOKEN_HMAC_KEY")
+	origDev := os.Getenv("LOCKBOX_DEV_MODE")
+	defer func() {
+		os.Setenv("LOCKBOX_TOKEN_HMAC_KEY", origKey)
+		os.Setenv("LOCKBOX_DEV_MODE", origDev)
+		reinitTokenHMACKey() // Restore for other tests
+	}()
+
+	// Clear key and disable dev mode
+	os.Unsetenv("LOCKBOX_TOKEN_HMAC_KEY")
+	os.Setenv("LOCKBOX_DEV_MODE", "false")
+
+	// Should panic
+	require.Panics(t, func() {
+		loadTokenHMACKey()
+	}, "SECURITY: Must panic when HMAC key is missing in production")
+}
+
+func TestLoadTokenHMACKey_PanicOnInvalidHex(t *testing.T) {
+	origKey := os.Getenv("LOCKBOX_TOKEN_HMAC_KEY")
+	defer func() {
+		os.Setenv("LOCKBOX_TOKEN_HMAC_KEY", origKey)
+		reinitTokenHMACKey()
+	}()
+
+	os.Setenv("LOCKBOX_TOKEN_HMAC_KEY", "not-valid-hex-string!")
+
+	require.Panics(t, func() {
+		loadTokenHMACKey()
+	}, "SECURITY: Must panic when HMAC key is invalid hex")
+}
+
+func TestLoadTokenHMACKey_PanicOnShortKey(t *testing.T) {
+	origKey := os.Getenv("LOCKBOX_TOKEN_HMAC_KEY")
+	defer func() {
+		os.Setenv("LOCKBOX_TOKEN_HMAC_KEY", origKey)
+		reinitTokenHMACKey()
+	}()
+
+	// Only 16 bytes (32 hex chars) - too short
+	os.Setenv("LOCKBOX_TOKEN_HMAC_KEY", "0123456789abcdef0123456789abcdef")
+
+	require.Panics(t, func() {
+		loadTokenHMACKey()
+	}, "SECURITY: Must panic when HMAC key is less than 32 bytes")
+}
+
+func TestLoadTokenHMACKey_PanicOnAllZeros(t *testing.T) {
+	origKey := os.Getenv("LOCKBOX_TOKEN_HMAC_KEY")
+	origDev := os.Getenv("LOCKBOX_DEV_MODE")
+	defer func() {
+		os.Setenv("LOCKBOX_TOKEN_HMAC_KEY", origKey)
+		os.Setenv("LOCKBOX_DEV_MODE", origDev)
+		reinitTokenHMACKey()
+	}()
+
+	// All zeros key in production
+	os.Setenv("LOCKBOX_TOKEN_HMAC_KEY", "0000000000000000000000000000000000000000000000000000000000000000")
+	os.Setenv("LOCKBOX_DEV_MODE", "false")
+
+	require.Panics(t, func() {
+		loadTokenHMACKey()
+	}, "SECURITY: Must panic when HMAC key is all zeros in production")
+}
+
+func TestLoadTokenHMACKey_ValidKey(t *testing.T) {
+	origKey := os.Getenv("LOCKBOX_TOKEN_HMAC_KEY")
+	defer func() {
+		os.Setenv("LOCKBOX_TOKEN_HMAC_KEY", origKey)
+		reinitTokenHMACKey()
+	}()
+
+	// Valid 32-byte key
+	os.Setenv("LOCKBOX_TOKEN_HMAC_KEY", "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
+
+	require.NotPanics(t, func() {
+		key := loadTokenHMACKey()
+		require.Len(t, key, 32, "Key should be 32 bytes")
+	}, "Valid key should not panic")
 }
 
 // ============================================

@@ -71,10 +71,10 @@ func apiMiddleware() echo.MiddlewareFunc {
 		Component.LogErrorfAndExit("'%s' should not be empty", Component.App().Config().GetParameterPath(&(ParamsRestAPI.JWTAuth.Salt)))
 	}
 
-	// API tokens do not expire.
+	// SECURITY: JWT tokens expire after configured session timeout (default 1 hour)
 	var err error
 	jwtAuth, err = jwt.NewAuth(salt,
-		0,
+		ParamsRestAPI.JWTAuth.SessionTimeout,
 		deps.Host.ID().String(),
 		deps.NodePrivateKey,
 	)

@@ -32,24 +32,63 @@ var (
 
 	// SECURITY: Token HMAC key for cryptographic verification.
 	// In production, this should be loaded from secure storage (HSM, Vault, etc.)
-	tokenHMACKey = getTokenHMACKey()
+	tokenHMACKey     []byte
+	tokenHMACKeyOnce sync.Once
 )
 
-// getTokenHMACKey returns the HMAC key for token signing/verification.
-// SECURITY: Must be at least 32 bytes for SHA-256.
-func getTokenHMACKey() []byte {
+// ensureTokenHMACKey initializes the HMAC key on first use (lazy init).
+// SECURITY: Panics if key is missing/invalid in production mode.
+func ensureTokenHMACKey() {
+	tokenHMACKeyOnce.Do(func() {
+		tokenHMACKey = loadTokenHMACKey()
+	})
+}
+
+// loadTokenHMACKey loads and validates the HMAC key from environment.
+func loadTokenHMACKey() []byte {
 	keyHex := os.Getenv("LOCKBOX_TOKEN_HMAC_KEY")
+	devMode := os.Getenv("LOCKBOX_DEV_MODE") == "true"
+
 	if keyHex == "" {
-		// Default key for development - MUST be overridden in production!
-		// WARNING: Using default key is a security risk!
-		keyHex = "0000000000000000000000000000000000000000000000000000000000000000"
+		if devMode {
+			// Development mode: use deterministic key for testing
+			// WARNING: NEVER use in production!
+			fmt.Fprintln(os.Stderr, "⚠️  WARNING: Using development HMAC key. Set LOCKBOX_TOKEN_HMAC_KEY in production!")
+			keyHex = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+		} else {
+			panic("SECURITY ERROR: LOCKBOX_TOKEN_HMAC_KEY environment variable is required. " +
+				"Generate with: openssl rand -hex 32")
+		}
 	}
+
 	key, err := hex.DecodeString(keyHex)
-	if err != nil || len(key) < 32 {
-		// Fallback to zeros - triggers warning in validateAccessToken
-		return make([]byte, 32)
+	if err != nil {
+		panic(fmt.Sprintf("SECURITY ERROR: LOCKBOX_TOKEN_HMAC_KEY is not valid hex: %v", err))
 	}
+	if len(key) < 32 {
+		panic(fmt.Sprintf("SECURITY ERROR: LOCKBOX_TOKEN_HMAC_KEY must be at least 32 bytes (64 hex chars), got %d bytes", len(key)))
+	}
+
+	// Check for all-zeros key (security violation)
+	allZeros := true
+	for _, b := range key {
+		if b != 0 {
+			allZeros = false
+			break
+		}
+	}
+	if allZeros && !devMode {
+		panic("SECURITY ERROR: LOCKBOX_TOKEN_HMAC_KEY cannot be all zeros in production")
+	}
+
 	return key
+}
+
+// reinitTokenHMACKey forces reinitialization of the HMAC key.
+// FOR TESTING ONLY - allows tests to set env vars before key is loaded.
+func reinitTokenHMACKey() {
+	tokenHMACKeyOnce = sync.Once{}
+	ensureTokenHMACKey()
 }
 
 // getDataDir returns the data directory for persistent storage
@@ -613,6 +652,7 @@ func (s *Service) validateAccessToken(token string) bool {
 
 // calculateTokenHMAC computes HMAC-SHA256 for a token payload.
 func calculateTokenHMAC(payload string) []byte {
+	ensureTokenHMACKey() // Lazy init - panics in production if key missing
 	h := hmac.New(sha256.New, tokenHMACKey)
 	h.Write([]byte(payload))
 	return h.Sum(nil)

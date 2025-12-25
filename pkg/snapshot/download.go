@@ -2,6 +2,8 @@ package snapshot
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +17,11 @@ import (
 
 	"github.com/iotaledger/hive.go/runtime/contextutils"
 	iotago "github.com/iotaledger/iota.go/v3"
+)
+
+var (
+	// ErrInsecureURL is returned when trying to download from non-HTTPS URL
+	ErrInsecureURL = errors.New("insecure URL: only HTTPS is allowed for snapshot downloads")
 )
 
 const (
@@ -216,8 +223,27 @@ func (s *Importer) DownloadSnapshotFiles(ctx context.Context, targetNetworkID ui
 	return ErrSnapshotDownloadNoValidSource
 }
 
+// validateURL checks that the URL uses HTTPS for security.
+// SECURITY: Prevents MITM attacks by requiring encrypted transport.
+func validateURL(url string) error {
+	lowered := strings.ToLower(url)
+	if !strings.HasPrefix(lowered, "https://") {
+		// Allow localhost/127.0.0.1 for development
+		if strings.HasPrefix(lowered, "http://localhost") || strings.HasPrefix(lowered, "http://127.0.0.1") {
+			return nil
+		}
+		return fmt.Errorf("%w: %s", ErrInsecureURL, url)
+	}
+	return nil
+}
+
 // downloads a snapshot header from the given url.
 func (s *Importer) downloadHeader(ctx context.Context, url string, headerConsumer func(readCloser io.ReadCloser) error) error {
+	// SECURITY: Validate URL uses HTTPS
+	if err := validateURL(url); err != nil {
+		return err
+	}
+
 	ctxHeader, cancelHeader := context.WithTimeout(ctx, timeoutDownloadSnapshotHeader)
 	defer cancelHeader()
 
@@ -240,7 +266,13 @@ func (s *Importer) downloadHeader(ctx context.Context, url string, headerConsume
 }
 
 // downloads a snapshot file from the given url to the specified path.
+// SECURITY: Validates HTTPS and computes SHA256 hash for integrity verification.
 func (s *Importer) downloadFile(ctx context.Context, path string, url string) error {
+	// SECURITY: Validate URL uses HTTPS
+	if err := validateURL(url); err != nil {
+		return err
+	}
+
 	downloadCtx, downloadCtxCancel := context.WithTimeout(ctx, timeoutDownloadSnapshotFile)
 	defer downloadCtxCancel()
 
@@ -273,9 +305,15 @@ func (s *Importer) downloadFile(ctx context.Context, path string, url string) er
 		}
 	}()
 
+	// SECURITY: Create SHA256 hasher for integrity verification
+	hasher := sha256.New()
+
 	// create our progress reporter and pass it to be used alongside our writer
 	counter := NewWriteCounter(ctx, uint64(resp.ContentLength))
-	if _, err = io.Copy(out, io.TeeReader(resp.Body, counter)); err != nil {
+
+	// SECURITY: Write to file, progress counter, AND compute hash simultaneously
+	multiWriter := io.MultiWriter(out, hasher)
+	if _, err = io.Copy(multiWriter, io.TeeReader(resp.Body, counter)); err != nil {
 		_ = out.Close()
 
 		return fmt.Errorf("download failed: %w", err)
@@ -287,6 +325,10 @@ func (s *Importer) downloadFile(ctx context.Context, path string, url string) er
 	if err = out.Close(); err != nil {
 		return fmt.Errorf("unable to close downloaded snapshot file: %w", err)
 	}
+
+	// SECURITY: Log SHA256 hash for verification
+	checksum := hex.EncodeToString(hasher.Sum(nil))
+	s.LogInfof("Downloaded snapshot SHA256: %s", checksum)
 
 	if err = os.Rename(tempFileName, path); err != nil {
 		return fmt.Errorf("unable to rename downloaded snapshot file: %w", err)
