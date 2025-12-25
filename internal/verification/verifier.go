@@ -2,6 +2,7 @@ package verification
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"fmt"
@@ -257,12 +258,16 @@ func (v *Verifier) performAdvancedVerification(asset *lockbox.LockedAsset, req *
 	return true
 }
 
+// VerifySignature verifies an Ed25519 signature.
+// publicKey must be 32 bytes, signature must be 64 bytes.
 func (v *Verifier) VerifySignature(data []byte, signature []byte, publicKey []byte) bool {
-	// Implement signature verification
-	// This is a placeholder - actual implementation would use proper crypto
-	h := sha256.New()
-	h.Write(data)
-	h.Write(publicKey)
-	expected := h.Sum(nil)
-	return hmac.Equal(expected[:16], signature[:16])
+	// Validate key and signature sizes
+	if len(publicKey) != ed25519.PublicKeySize {
+		return false
+	}
+	if len(signature) != ed25519.SignatureSize {
+		return false
+	}
+	// Verify Ed25519 signature
+	return ed25519.Verify(publicKey, data, signature)
 }

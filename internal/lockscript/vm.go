@@ -185,12 +185,11 @@ func (vm *VirtualMachine) Execute(ctx context.Context, bytecode []byte, env *Env
 			vm.gasUsed += 5
 			
 		case OpSigVerify:
-			// Signature verification placeholder
+			// Ed25519 signature verification
 			signature := vm.popString()
 			message := vm.popString()
 			pubKey := vm.popString()
-			
-			// TODO: Implement actual signature verification
+
 			verified := vm.verifySignature(pubKey, message, signature)
 			vm.push(verified)
 			vm.gasUsed += 3000

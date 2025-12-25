@@ -2,6 +2,8 @@ package verification
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"sync"
 	"testing"
@@ -109,4 +111,88 @@ func (h *VerificationTestHelper) AddNode(region string, reliability int, latency
 		Reputation: float64(reliability) / 100.0,
 		Available:  true,
 	})
+}
+
+// ============================================
+// VerifySignature Tests (Ed25519)
+// ============================================
+
+func setupTestVerifier(t *testing.T) *Verifier {
+	initTestLogger()
+	return &Verifier{
+		WrappedLogger: logger.NewWrappedLogger(logger.NewLogger("test")),
+	}
+}
+
+func TestVerifySignature_Valid(t *testing.T) {
+	v := setupTestVerifier(t)
+
+	// Generate Ed25519 key pair
+	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	message := []byte("test message for signing")
+	signature := ed25519.Sign(privKey, message)
+
+	// Verify with correct signature
+	result := v.VerifySignature(message, signature, pubKey)
+	require.True(t, result, "Valid signature should verify")
+}
+
+func TestVerifySignature_Invalid(t *testing.T) {
+	v := setupTestVerifier(t)
+
+	// Generate Ed25519 key pair
+	pubKey, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	message := []byte("test message for signing")
+	// Create a fake signature (64 bytes of zeros)
+	fakeSignature := make([]byte, ed25519.SignatureSize)
+
+	// Verify with fake signature
+	result := v.VerifySignature(message, fakeSignature, pubKey)
+	require.False(t, result, "Invalid signature should not verify")
+}
+
+func TestVerifySignature_WrongKey(t *testing.T) {
+	v := setupTestVerifier(t)
+
+	// Generate two different key pairs
+	_, privKey1, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	pubKey2, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	message := []byte("test message for signing")
+	signature := ed25519.Sign(privKey1, message)
+
+	// Verify with wrong public key
+	result := v.VerifySignature(message, signature, pubKey2)
+	require.False(t, result, "Signature should not verify with wrong key")
+}
+
+func TestVerifySignature_WrongKeySize(t *testing.T) {
+	v := setupTestVerifier(t)
+
+	// Wrong size public key
+	wrongSizePubKey := make([]byte, 16) // Should be 32
+	message := []byte("test message")
+	signature := make([]byte, ed25519.SignatureSize)
+
+	result := v.VerifySignature(message, signature, wrongSizePubKey)
+	require.False(t, result, "Wrong size public key should fail")
+}
+
+func TestVerifySignature_WrongSignatureSize(t *testing.T) {
+	v := setupTestVerifier(t)
+
+	pubKey, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	message := []byte("test message")
+	wrongSizeSignature := make([]byte, 32) // Should be 64
+
+	result := v.VerifySignature(message, wrongSizeSignature, pubKey)
+	require.False(t, result, "Wrong size signature should fail")
 }

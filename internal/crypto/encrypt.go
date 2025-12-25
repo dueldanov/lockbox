@@ -2,7 +2,9 @@ package crypto
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -302,26 +304,20 @@ func generateShardID() uint32 {
 	return id
 }
 
+// calculateChecksum computes a SHA-256 based checksum for data integrity.
+// Returns first 16 bytes of SHA-256 hash for compact storage while maintaining
+// collision resistance (128 bits is sufficient for integrity checks).
 func calculateChecksum(data []byte) []byte {
-	// Simple checksum for now - in production use HMAC
-	sum := make([]byte, 16)
-	for i := 0; i < len(data); i++ {
-		sum[i%16] ^= data[i]
-	}
-	return sum
+	hash := sha256.Sum256(data)
+	return hash[:16] // 128 bits is sufficient for integrity
 }
 
+// verifyChecksum validates data integrity using constant-time comparison.
+// Uses hmac.Equal to prevent timing attacks.
 func verifyChecksum(data, checksum []byte) bool {
 	calculated := calculateChecksum(data)
-	if len(calculated) != len(checksum) {
-		return false
-	}
-	for i := range calculated {
-		if calculated[i] != checksum[i] {
-			return false
-		}
-	}
-	return true
+	// Use constant-time comparison to prevent timing attacks
+	return hmac.Equal(calculated, checksum)
 }
 
 // ShardStorage interface for storing encrypted shards
