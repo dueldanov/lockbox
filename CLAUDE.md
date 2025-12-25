@@ -3,6 +3,7 @@
 ## Документация проекта
 
 - **[Полная архитектура проекта](docs/ARCHITECTURE.md)** - логика, компоненты, потоки данных
+- **[Security Testing Guidelines](docs/SECURITY_TESTING.md)** - ОБЯЗАТЕЛЬНО для crypto/security кода
 - [План разработки Phase 1](docs/PHASE_1_DEV_DETAILED.md)
 - [План интеграции](docs/INTEGRATION_FIX_PLAN.md)
 - [Security Assessment](docs/SECURITY_ASSESSMENT_REPORT_EN.md)
@@ -128,6 +129,38 @@ const (
 2. Следовать существующим паттернам кода
 3. Обновить proto если нужен новый API endpoint
 4. Добавить тесты
+
+### При написании security-critical кода:
+
+**ОБЯЗАТЕЛЬНО** читай [docs/SECURITY_TESTING.md](docs/SECURITY_TESTING.md)!
+
+**Золотое правило:** Если тест проходит с фейковыми данными, функция сломана.
+
+```go
+// ❌ ПЛОХО - этот тест пройдёт с broken implementation
+func TestVerify_Bad(t *testing.T) {
+    result := verify("fake-sig", "fake-key")
+    require.True(t, result)  // Passes if verify() just returns true
+}
+
+// ✅ ХОРОШО - использует реальную криптографию
+func TestVerify_Good(t *testing.T) {
+    pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+    sig := ed25519.Sign(priv, []byte("msg"))
+    require.True(t, verify(sig, pub))
+
+    // CRITICAL: Fake signature MUST fail!
+    fakeSig := make([]byte, 64)
+    require.False(t, verify(fakeSig, pub), "MUST reject fake!")
+}
+```
+
+**Обязательные тесты для crypto функций:**
+- ✅ Valid input → success
+- ✅ Fake/invalid input → FAIL
+- ✅ Wrong key → FAIL
+- ✅ Malformed input → FAIL
+- ✅ Replay attack → FAIL (для nonces)
 
 ---
 
