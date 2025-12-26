@@ -1,9 +1,11 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -11,6 +13,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/consensys/gnark-crypto/ecc"
+	"github.com/consensys/gnark/backend/groth16"
 
 	"github.com/dueldanov/lockbox/v2/internal/crypto"
 	"github.com/dueldanov/lockbox/v2/internal/interfaces"
@@ -26,10 +31,13 @@ import (
 )
 
 var (
-	ErrAssetNotFound      = errors.New("asset not found")
-	ErrAssetAlreadyLocked = errors.New("asset already locked")
-	ErrUnauthorized       = errors.New("unauthorized")
-	ErrInvalidUnlockTime  = errors.New("invalid unlock time")
+	ErrAssetNotFound          = errors.New("asset not found")
+	ErrAssetAlreadyLocked     = errors.New("asset already locked")
+	ErrAssetStillLocked       = errors.New("asset still locked - unlock time not reached")
+	ErrUnauthorized           = errors.New("unauthorized")
+	ErrNonceInvalid           = errors.New("nonce invalid or already used")
+	ErrInvalidUnlockTime      = errors.New("invalid unlock time")
+	ErrOwnershipProofRequired = errors.New("ownership proof is required for unlock")
 )
 
 type Service struct {
@@ -507,10 +515,20 @@ func (s *Service) LockAsset(ctx context.Context, req *LockAssetRequest) (*LockAs
 		if err != nil {
 			zkpErr = err
 		} else {
-			ownershipProof = &interfaces.OwnershipProof{
-				AssetCommitment: cryptoProof.AssetCommitment,
-				OwnerAddress:    cryptoProof.OwnerAddress,
-				Timestamp:       cryptoProof.Timestamp,
+			// SECURITY: Serialize groth16.Proof for persistence
+			var proofBuf bytes.Buffer
+			if cryptoProof.Proof != nil {
+				if _, err := cryptoProof.Proof.WriteTo(&proofBuf); err != nil {
+					zkpErr = fmt.Errorf("failed to serialize proof: %w", err)
+				}
+			}
+			if zkpErr == nil {
+				ownershipProof = &interfaces.OwnershipProof{
+					AssetCommitment: cryptoProof.AssetCommitment,
+					OwnerAddress:    cryptoProof.OwnerAddress,
+					Timestamp:       cryptoProof.Timestamp,
+					ProofBytes:      proofBuf.Bytes(),
+				}
 			}
 		}
 	}
@@ -721,6 +739,10 @@ func (s *Service) LockAsset(ctx context.Context, req *LockAssetRequest) (*LockAs
 	// Store Asset Metadata
 	// =========================================================================
 	stepStart = time.Now()
+
+	// Get HKDF salt for V2 format (enables trial decryption after restart)
+	bundleSalt := s.hkdfManager.GetSalt()
+
 	asset := &LockedAsset{
 		ID:                assetID,
 		OwnerAddress:      req.OwnerAddress,
@@ -733,8 +755,14 @@ func (s *Service) LockAsset(ctx context.Context, req *LockAssetRequest) (*LockAs
 		Status:            AssetStatusLocked,
 		CreatedAt:         lockTime,
 		UpdatedAt:         lockTime,
+		// V2 fields for trial decryption (shard indistinguishability)
+		TotalShards:       len(mixedShards),
+		RealCount:         len(shards),
+		Salt:              bundleSalt,
+		// DEPRECATED: ShardIndexMap is kept for backward compatibility
+		// New code should use trial decryption with TotalShards/RealCount/Salt
 		ShardIndexMap:     indexMap,
-		ShardCount:        len(shards),
+		ShardCount:        len(shards), // DEPRECATED: use RealCount
 	}
 
 	if err := s.storageManager.StoreLockedAsset(asset); err != nil {
@@ -888,12 +916,22 @@ func (s *Service) UnlockAsset(ctx context.Context, req *UnlockAssetRequest) (*Un
 	// =========================================================================
 	stepStart := time.Now()
 
-	// #1 validate_access_token
+	// #1 validate_access_token — SECURITY: Actually validate, don't just log
+	if !s.validateAccessToken(req.AccessToken) {
+		log.LogStepWithDuration(logging.PhaseTokenValidation, "validate_access_token",
+			"tokenHash=hidden, valid=false", time.Since(stepStart), ErrUnauthorized)
+		return nil, ErrUnauthorized
+	}
 	log.LogStepWithDuration(logging.PhaseTokenValidation, "validate_access_token",
-		fmt.Sprintf("tokenHash=hidden, valid=true"), time.Since(stepStart), nil)
+		"tokenHash=hidden, valid=true", time.Since(stepStart), nil)
 
-	// #2 check_token_nonce
+	// #2 check_token_nonce — SECURITY: Actually check nonce for replay protection
 	stepStart = time.Now()
+	if !s.checkTokenNonce(req.Nonce) {
+		log.LogStepWithDuration(logging.PhaseTokenValidation, "check_token_nonce",
+			"nonceValid=false, replayAttackPrevented=true", time.Since(stepStart), ErrNonceInvalid)
+		return nil, ErrNonceInvalid
+	}
 	log.LogStepWithDuration(logging.PhaseTokenValidation, "check_token_nonce",
 		"nonceValid=true, timestampCheck=pass", time.Since(stepStart), nil)
 
@@ -994,44 +1032,45 @@ func (s *Service) UnlockAsset(ctx context.Context, req *UnlockAssetRequest) (*Un
 	}
 
 	// Verify ownership
+	// SECURITY: Ownership proof is REQUIRED for unlock
 	stepStart = time.Now()
-	if ownershipProof != nil {
-		if s.zkpProvider != nil {
-			interfaceProof := &interfaces.OwnershipProof{
-				AssetCommitment: ownershipProof.AssetCommitment,
-				OwnerAddress:    ownershipProof.OwnerAddress,
-				Timestamp:       ownershipProof.Timestamp,
-			}
-			if err := s.zkpProvider.VerifyOwnershipProof(interfaceProof); err != nil {
-				log.LogStepWithDuration(logging.PhaseOwnership, "gnark.Verify",
-					"verificationFailed", time.Since(stepStart), ErrUnauthorized)
-				return nil, ErrUnauthorized
-			}
-		} else if err := s.zkpManager.VerifyOwnershipProof(ownershipProof); err != nil {
+	if ownershipProof == nil {
+		log.LogStepWithDuration(logging.PhaseOwnership, "gnark.Verify",
+			"ownershipProofMissing=true", time.Since(stepStart), ErrOwnershipProofRequired)
+		return nil, ErrOwnershipProofRequired
+	}
+	// Verify the proof
+	if s.zkpProvider != nil {
+		interfaceProof := &interfaces.OwnershipProof{
+			AssetCommitment: ownershipProof.AssetCommitment,
+			OwnerAddress:    ownershipProof.OwnerAddress,
+			Timestamp:       ownershipProof.Timestamp,
+		}
+		if err := s.zkpProvider.VerifyOwnershipProof(interfaceProof); err != nil {
 			log.LogStepWithDuration(logging.PhaseOwnership, "gnark.Verify",
 				"verificationFailed", time.Since(stepStart), ErrUnauthorized)
 			return nil, ErrUnauthorized
 		}
+	} else if err := s.zkpManager.VerifyOwnershipProof(ownershipProof); err != nil {
+		log.LogStepWithDuration(logging.PhaseOwnership, "gnark.Verify",
+			"verificationFailed", time.Since(stepStart), ErrUnauthorized)
+		return nil, ErrUnauthorized
 	}
 	log.LogStepWithDuration(logging.PhaseOwnership, "gnark.Verify",
 		"verificationResult=true", time.Since(stepStart), nil)
 
 	// =========================================================================
 	// PHASE 4: Multi-Signature Verification (10 functions)
+	// SECURITY: Actually verify multi-sig, don't just log success
 	// =========================================================================
 
-	// #47-56: Multi-sig functions
+	// Check if multi-sig is required for this asset
+	// NOTE: We need the asset to check MinSignatures, but asset is loaded in Phase 7.
+	// For now, we'll store request data and verify after asset load.
+	// The actual verification happens after asset retrieval below.
 	stepStart = time.Now()
-	multiSigRequired := len(req.Signatures) > 0
 	log.LogStepWithDuration(logging.PhaseMultiSig, "check_multisig_required",
-		fmt.Sprintf("multiSigStatus=%v", multiSigRequired), time.Since(stepStart), nil)
-
-	for _, fn := range []string{"get_multisig_config", "collect_signer_proofs", "verify_threshold_zkp",
-		"aggregate_signatures", "validate_signer_identity", "check_signer_authorization",
-		"verify_signature_freshness", "compute_aggregate_hash", "gnark.Verify"} {
-		stepStart = time.Now()
-		log.LogStepWithDuration(logging.PhaseMultiSig, fn, "success=true", time.Since(stepStart), nil)
-	}
+		"deferredUntilAssetLoad=true", time.Since(stepStart), nil)
 
 	// =========================================================================
 	// PHASE 5: Dual Coordinating Node Selection (14 functions)
@@ -1081,6 +1120,41 @@ func (s *Service) UnlockAsset(ctx context.Context, req *UnlockAssetRequest) (*Un
 	}
 	log.LogStepWithDuration(logging.PhaseBundleRetrieval, "fetch_main_tx",
 		fmt.Sprintf("txID=%s, fetchSuccess=true", req.AssetID), time.Since(stepStart), nil)
+
+	// SECURITY: Check lock-time BEFORE any decryption
+	stepStart = time.Now()
+	if time.Now().Before(asset.UnlockTime) {
+		log.LogStepWithDuration(logging.PhaseBundleRetrieval, "check_lock_time",
+			fmt.Sprintf("unlockTime=%s, status=STILL_LOCKED", asset.UnlockTime.Format(time.RFC3339)),
+			time.Since(stepStart), ErrAssetStillLocked)
+		return nil, ErrAssetStillLocked
+	}
+	log.LogStepWithDuration(logging.PhaseBundleRetrieval, "check_lock_time",
+		fmt.Sprintf("unlockTime=%s, status=UNLOCKABLE", asset.UnlockTime.Format(time.RFC3339)),
+		time.Since(stepStart), nil)
+
+	// SECURITY: Multi-sig verification (deferred from Phase 4)
+	stepStart = time.Now()
+	if asset.MinSignatures > 0 && len(asset.MultiSigAddresses) > 0 {
+		validSigs, err := s.verifyMultiSigSignatures(req.AssetID, req.Signatures, asset.MultiSigAddresses)
+		if err != nil {
+			log.LogStepWithDuration(logging.PhaseMultiSig, "verify_multisig_signatures",
+				fmt.Sprintf("verificationError=%v", err), time.Since(stepStart), err)
+			return nil, fmt.Errorf("multi-sig verification failed: %w", err)
+		}
+		if validSigs < asset.MinSignatures {
+			log.LogStepWithDuration(logging.PhaseMultiSig, "verify_multisig_signatures",
+				fmt.Sprintf("validSignatures=%d, required=%d, INSUFFICIENT", validSigs, asset.MinSignatures),
+				time.Since(stepStart), ErrUnauthorized)
+			return nil, fmt.Errorf("insufficient signatures: got %d, need %d", validSigs, asset.MinSignatures)
+		}
+		log.LogStepWithDuration(logging.PhaseMultiSig, "verify_multisig_signatures",
+			fmt.Sprintf("validSignatures=%d, required=%d, PASSED", validSigs, asset.MinSignatures),
+			time.Since(stepStart), nil)
+	} else {
+		log.LogStepWithDuration(logging.PhaseMultiSig, "verify_multisig_signatures",
+			"multiSigNotRequired=true", time.Since(stepStart), nil)
+	}
 
 	// #92-108: Bundle retrieval functions
 	for _, fn := range []string{"iota.GetMessage", "parse_bundle_metadata", "extract_salt",
@@ -1165,11 +1239,64 @@ func (s *Service) UnlockAsset(ctx context.Context, req *UnlockAssetRequest) (*Un
 
 	// #143 iterate_decrypt_shards
 	stepStart = time.Now()
-	realShards, err := s.shardMixer.ExtractRealShards(mixedShards, asset.ShardIndexMap)
-	if err != nil {
-		log.LogStepWithDuration(logging.PhaseShardDecryption, "iterate_decrypt_shards",
-			"extractionFailed", time.Since(stepStart), err)
-		return nil, fmt.Errorf("failed to extract real shards: %w", err)
+
+	var realShards []*crypto.CharacterShard
+	var assetData []byte // Declared here for goto compatibility
+
+	// V2 path: Use trial decryption if Salt is available
+	if asset.Salt != nil && len(asset.Salt) > 0 && asset.RealCount > 0 {
+		// Clone HKDF manager with bundle's persisted salt (same master key, different salt)
+		hkdfWithSalt, err := s.hkdfManager.CloneWithSalt(asset.Salt)
+		if err != nil {
+			log.LogStepWithDuration(logging.PhaseShardDecryption, "iterate_decrypt_shards",
+				"failed to restore HKDF with salt", time.Since(stepStart), err)
+			return nil, fmt.Errorf("failed to restore HKDF: %w", err)
+		}
+		defer hkdfWithSalt.Clear()
+
+		// Convert mixedShards to StoredShards for trial decryption
+		storedShards := make([]*StoredShard, len(mixedShards))
+		for i, ms := range mixedShards {
+			storedShards[i] = &StoredShard{
+				Position:   uint32(i),
+				Nonce:      ms.Nonce,
+				Ciphertext: ms.Data,
+			}
+		}
+
+		// Use trial decryption (no ShardIndexMap needed)
+		assetCopy := &LockedAsset{
+			ID:         asset.ID,
+			ShardCount: asset.RealCount,
+		}
+		// Pass the cloned HKDF manager with bundle's salt for correct key derivation
+		recoveredData, err := s.RecoverWithTrialDecryptionWithHKDF(assetCopy, storedShards, hkdfWithSalt)
+		if err != nil {
+			log.LogStepWithDuration(logging.PhaseShardDecryption, "iterate_decrypt_shards",
+				"trial decryption failed", time.Since(stepStart), err)
+			// Fall back to legacy method if trial decryption fails
+			realShards, err = s.shardMixer.ExtractRealShards(mixedShards, asset.ShardIndexMap)
+			if err != nil {
+				return nil, fmt.Errorf("failed to extract real shards: %w", err)
+			}
+		} else {
+			// Trial decryption succeeded - data is already reassembled
+			log.LogStepWithDuration(logging.PhaseShardDecryption, "iterate_decrypt_shards",
+				fmt.Sprintf("trialDecryption=success, recoveredBytes=%d", len(recoveredData)), time.Since(stepStart), nil)
+			// Skip the old decryption path, use recovered data directly
+			// Note: This bypasses the old shardEncryptor.DecryptShards flow
+			// The data is already decrypted and reassembled
+			assetData = recoveredData
+			goto reconstructionComplete
+		}
+	} else {
+		// Legacy path: Use ShardIndexMap (DEPRECATED)
+		realShards, err = s.shardMixer.ExtractRealShards(mixedShards, asset.ShardIndexMap)
+		if err != nil {
+			log.LogStepWithDuration(logging.PhaseShardDecryption, "iterate_decrypt_shards",
+				"extractionFailed", time.Since(stepStart), err)
+			return nil, fmt.Errorf("failed to extract real shards: %w", err)
+		}
 	}
 	log.LogStepWithDuration(logging.PhaseShardDecryption, "iterate_decrypt_shards",
 		fmt.Sprintf("totalIterations=%d", len(mixedShards)), time.Since(stepStart), nil)
@@ -1190,7 +1317,7 @@ func (s *Service) UnlockAsset(ctx context.Context, req *UnlockAssetRequest) (*Un
 
 	// #161 order_characters
 	stepStart = time.Now()
-	assetData, err := s.shardEncryptor.DecryptShards(realShards)
+	assetData, err = s.shardEncryptor.DecryptShards(realShards)
 	if err != nil {
 		log.LogStepWithDuration(logging.PhaseKeyReconstruction, "order_characters",
 			"decryptionFailed", time.Since(stepStart), err)
@@ -1208,6 +1335,7 @@ func (s *Service) UnlockAsset(ctx context.Context, req *UnlockAssetRequest) (*Un
 			fmt.Sprintf("success=true, dataLen=%d", len(assetData)), time.Since(stepStart), nil)
 	}
 
+reconstructionComplete:
 	// =========================================================================
 	// PHASE 12: Token Rotation (8 functions)
 	// =========================================================================
@@ -1636,12 +1764,451 @@ func (s *Service) deserializeShard(data []byte) (*crypto.CharacterShard, error) 
 	}, nil
 }
 
+// =============================================================================
+// V2 Shard Format — Indistinguishable Serialization
+// =============================================================================
+//
+// SECURITY: V2 format does NOT store ShardType or OriginalIndex.
+// Storage nodes cannot distinguish real from decoy shards.
+//
+// Binary format:
+// [1 byte: version=0x02]
+// [4 bytes: position (big-endian uint32)]
+// [24 bytes: nonce (XChaCha20-Poly1305)]
+// [N bytes: ciphertext with padding + 16-byte auth tag]
+//
+// Total size is fixed to prevent length-based classification.
+
+const (
+	// ShardFormatV2 is the version marker for V2 binary format
+	ShardFormatV2 byte = 0x02
+
+	// V2NonceSize is XChaCha20-Poly1305 nonce size
+	V2NonceSize = 24
+
+	// V2AuthTagSize is Poly1305 authentication tag size
+	V2AuthTagSize = 16
+
+	// V2MaxShardDataSize is the maximum shard data after padding
+	V2MaxShardDataSize = 1024
+
+	// V2HeaderSize is version (1) + position (4) + nonce (24)
+	V2HeaderSize = 1 + 4 + V2NonceSize
+
+	// V2TotalSize is the fixed size of all V2 shards
+	V2TotalSize = V2HeaderSize + V2MaxShardDataSize + V2AuthTagSize
+)
+
+// V2 format errors
+var (
+	ErrShardTooLarge   = errors.New("shard data exceeds maximum size")
+	ErrInvalidV2Format = errors.New("invalid V2 shard format")
+)
+
+// serializeMixedShardV2 serializes a shard in V2 binary format.
+//
+// SECURITY: Output does NOT contain ShardType or OriginalIndex.
+// All shards have identical size for indistinguishability.
+func (s *Service) serializeMixedShardV2(shard *crypto.MixedShard, position uint32) ([]byte, error) {
+	// Validate ciphertext size (Data should already be encrypted with auth tag)
+	if len(shard.Data) > V2MaxShardDataSize+V2AuthTagSize {
+		return nil, fmt.Errorf("%w: got %d bytes, max %d", ErrShardTooLarge, len(shard.Data), V2MaxShardDataSize+V2AuthTagSize)
+	}
+
+	// Validate nonce
+	if len(shard.Nonce) != V2NonceSize {
+		return nil, fmt.Errorf("invalid nonce size: expected %d, got %d", V2NonceSize, len(shard.Nonce))
+	}
+
+	// Allocate fixed-size buffer
+	buf := make([]byte, V2TotalSize)
+
+	// Write header
+	buf[0] = ShardFormatV2
+	buf[1] = byte(position >> 24)
+	buf[2] = byte(position >> 16)
+	buf[3] = byte(position >> 8)
+	buf[4] = byte(position)
+
+	// Write nonce
+	copy(buf[5:29], shard.Nonce)
+
+	// Write padded ciphertext (padding is automatic - buffer is zero-filled)
+	copy(buf[29:], shard.Data)
+
+	return buf, nil
+}
+
+// deserializeMixedShardV2 deserializes a V2 format shard.
+//
+// Returns StoredShard which contains NO type information.
+func (s *Service) deserializeMixedShardV2(data []byte) (*StoredShard, error) {
+	// Validate minimum size
+	if len(data) < V2HeaderSize {
+		return nil, fmt.Errorf("%w: too short", ErrInvalidV2Format)
+	}
+
+	// Check version
+	if data[0] != ShardFormatV2 {
+		return nil, fmt.Errorf("%w: version byte 0x%02x, expected 0x%02x", ErrInvalidV2Format, data[0], ShardFormatV2)
+	}
+
+	// Parse position (big-endian)
+	position := uint32(data[1])<<24 | uint32(data[2])<<16 | uint32(data[3])<<8 | uint32(data[4])
+
+	// Extract nonce
+	nonce := make([]byte, V2NonceSize)
+	copy(nonce, data[5:29])
+
+	// Extract ciphertext (rest of buffer, may include padding)
+	ciphertext := make([]byte, len(data)-V2HeaderSize)
+	copy(ciphertext, data[29:])
+
+	return &StoredShard{
+		Position:   position,
+		Nonce:      nonce,
+		Ciphertext: ciphertext,
+	}, nil
+}
+
+// serializeAssetV2 serializes a LockedAsset for storage.
+//
+// SECURITY: Excludes ShardIndexMap to prevent type leakage.
+// Trial decryption is used instead for recovery.
+func (s *Service) serializeAssetV2(asset *LockedAsset) ([]byte, error) {
+	// Create a copy without ShardIndexMap for serialization
+	// V2 format: NO ShardIndexMap, YES Salt/TotalShards/RealCount
+	type assetV2 struct {
+		ID          string `json:"id"`
+		TotalShards int    `json:"total_shards"`
+		RealCount   int    `json:"real_count"`
+		Salt        string `json:"salt,omitempty"` // Base64 encoded
+		Status      string `json:"status"`
+		ShardCount  int    `json:"shard_count,omitempty"`
+	}
+
+	// Encode salt as hex for readability
+	saltHex := ""
+	if len(asset.Salt) > 0 {
+		saltHex = fmt.Sprintf("%x", asset.Salt)
+	}
+
+	v2 := assetV2{
+		ID:          asset.ID,
+		TotalShards: asset.TotalShards,
+		RealCount:   asset.RealCount,
+		Salt:        saltHex,
+		Status:      string(asset.Status),
+		ShardCount:  asset.ShardCount,
+	}
+
+	// Fallback: if TotalShards/RealCount not set, use ShardCount
+	if v2.TotalShards == 0 && asset.ShardCount > 0 {
+		v2.TotalShards = asset.ShardCount
+	}
+	if v2.RealCount == 0 && asset.ShardCount > 0 {
+		v2.RealCount = asset.ShardCount
+	}
+
+	// Use encoding/json for serialization
+	return encodeJSON(v2)
+}
+
+// encodeJSON encodes a value to JSON using the standard library.
+func encodeJSON(v interface{}) ([]byte, error) {
+	return json.Marshal(v)
+}
+
+// StoredShard represents a shard as stored in V2 format.
+//
+// SECURITY: This type has NO ShardType or OriginalIndex fields.
+// Type information is not stored and must be determined via trial decryption.
+type StoredShard struct {
+	Position   uint32 // Storage position (NOT original index)
+	Nonce      []byte // 24-byte XChaCha20 nonce
+	Ciphertext []byte // Encrypted data with auth tag and padding
+}
+
+// =============================================================================
+// Trial Decryption Recovery
+// =============================================================================
+
+// lockAssetForTrialDecryption creates an asset with mixed shards for trial decryption.
+// This is used for testing the trial decryption recovery process.
+func (s *Service) lockAssetForTrialDecryption(data []byte, realCount, totalCount int) (*LockedAsset, []*StoredShard, error) {
+	if s.hkdfManager == nil {
+		return nil, nil, fmt.Errorf("HKDF manager not initialized")
+	}
+
+	// Generate bundle ID
+	bundleID := make([]byte, 16)
+	if _, err := rand.Read(bundleID); err != nil {
+		return nil, nil, err
+	}
+	bundleIDStr := hex.EncodeToString(bundleID)
+
+	// Split data into realCount shards
+	shardSize := (len(data) + realCount - 1) / realCount
+	if shardSize < 1 {
+		shardSize = 1
+	}
+
+	shards := make([]*StoredShard, totalCount)
+
+	// Create real shards (encrypted with position-based keys)
+	for i := 0; i < realCount; i++ {
+		start := i * shardSize
+		end := start + shardSize
+		if end > len(data) {
+			end = len(data)
+		}
+
+		var shardData []byte
+		if start < len(data) {
+			shardData = data[start:end]
+		} else {
+			shardData = []byte{}
+		}
+
+		// Derive key for this real shard's original index
+		key, err := s.hkdfManager.DeriveKeyForPosition(bundleIDStr, uint32(i))
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to derive key: %w", err)
+		}
+
+		// Encrypt with AEAD
+		encryptor, err := crypto.NewAEADEncryptor(key)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		ciphertext, err := encryptor.Encrypt(shardData)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// Create stored shard (position will be shuffled later)
+		shards[i] = &StoredShard{
+			Position:   uint32(i), // Temporary, will be shuffled
+			Nonce:      ciphertext[:24],
+			Ciphertext: ciphertext[24:],
+		}
+	}
+
+	// Create decoy shards (encrypted with random/high-index keys)
+	for i := realCount; i < totalCount; i++ {
+		// Random data for decoys
+		decoyData := make([]byte, shardSize)
+		rand.Read(decoyData)
+
+		// Derive key using high index (1000+) to avoid collision with real indices
+		key, err := s.hkdfManager.DeriveKeyForPosition(bundleIDStr, uint32(1000+i))
+		if err != nil {
+			return nil, nil, err
+		}
+
+		encryptor, err := crypto.NewAEADEncryptor(key)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		ciphertext, err := encryptor.Encrypt(decoyData)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		shards[i] = &StoredShard{
+			Position:   uint32(i),
+			Nonce:      ciphertext[:24],
+			Ciphertext: ciphertext[24:],
+		}
+	}
+
+	// Shuffle shards (Fisher-Yates)
+	for i := len(shards) - 1; i > 0; i-- {
+		jBytes := make([]byte, 1)
+		rand.Read(jBytes)
+		j := int(jBytes[0]) % (i + 1)
+		shards[i], shards[j] = shards[j], shards[i]
+	}
+
+	// Update positions after shuffle
+	for i := range shards {
+		shards[i].Position = uint32(i)
+	}
+
+	// Create asset (NO ShardIndexMap!)
+	asset := &LockedAsset{
+		ID:         bundleIDStr,
+		ShardCount: realCount,
+		Status:     AssetStatusLocked,
+		// ShardIndexMap is intentionally NOT set
+	}
+
+	return asset, shards, nil
+}
+
+// RecoverWithTrialDecryption recovers data from mixed shards using trial decryption.
+//
+// Algorithm:
+// - For each real index (0 to realCount-1):
+//   - Derive key for that index
+//   - Try decrypting each shard until one succeeds
+//   - Mark that shard as used
+// - Reassemble real shards in order
+func (s *Service) RecoverWithTrialDecryption(asset *LockedAsset, shards []*StoredShard) ([]byte, error) {
+	return s.RecoverWithTrialDecryptionWorkersWithHKDF(asset, shards, 1, nil)
+}
+
+// RecoverWithTrialDecryptionWorkers is like RecoverWithTrialDecryption but uses
+// multiple worker goroutines for parallel decryption attempts.
+func (s *Service) RecoverWithTrialDecryptionWorkers(asset *LockedAsset, shards []*StoredShard, workers int) ([]byte, error) {
+	return s.RecoverWithTrialDecryptionWorkersWithHKDF(asset, shards, workers, nil)
+}
+
+// RecoverWithTrialDecryptionWithHKDF is like RecoverWithTrialDecryption but uses
+// a provided HKDF manager instead of the service's default.
+// Use this when recovering with a bundle-specific salt.
+func (s *Service) RecoverWithTrialDecryptionWithHKDF(asset *LockedAsset, shards []*StoredShard, hkdf *crypto.HKDFManager) ([]byte, error) {
+	return s.RecoverWithTrialDecryptionWorkersWithHKDF(asset, shards, 1, hkdf)
+}
+
+// RecoverWithTrialDecryptionWorkersWithHKDF is like RecoverWithTrialDecryptionWorkers but
+// allows specifying a custom HKDF manager. If hkdf is nil, uses the service's default.
+func (s *Service) RecoverWithTrialDecryptionWorkersWithHKDF(asset *LockedAsset, shards []*StoredShard, workers int, hkdf *crypto.HKDFManager) ([]byte, error) {
+	// Use provided HKDF or fall back to service's default
+	hkdfManager := hkdf
+	if hkdfManager == nil {
+		hkdfManager = s.hkdfManager
+	}
+	if hkdfManager == nil {
+		return nil, fmt.Errorf("HKDF manager not initialized")
+	}
+
+	if workers < 1 {
+		workers = 1
+	}
+
+	realCount := asset.ShardCount
+	bundleID := asset.ID
+
+	// Track recovered shards and used positions
+	recovered := make(map[int][]byte)
+	usedPositions := make(map[int]bool)
+
+	maxAttempts := len(shards) * realCount
+	attempts := 0
+
+	// For each real shard index
+	for realIdx := 0; realIdx < realCount; realIdx++ {
+		// Derive key for this real index
+		key, err := hkdfManager.DeriveKeyForPosition(bundleID, uint32(realIdx))
+		if err != nil {
+			return nil, fmt.Errorf("failed to derive key for index %d: %w", realIdx, err)
+		}
+
+		encryptor, err := crypto.NewAEADEncryptor(key)
+		if err != nil {
+			return nil, err
+		}
+
+		found := false
+		// Try each shard
+		for pos, shard := range shards {
+			if usedPositions[pos] {
+				continue
+			}
+
+			attempts++
+			if attempts > maxAttempts {
+				return nil, fmt.Errorf("max attempts exceeded: tried %d decryptions", attempts)
+			}
+
+			// Reconstruct ciphertext (nonce + encrypted data)
+			fullCiphertext := make([]byte, len(shard.Nonce)+len(shard.Ciphertext))
+			copy(fullCiphertext[:len(shard.Nonce)], shard.Nonce)
+			copy(fullCiphertext[len(shard.Nonce):], shard.Ciphertext)
+
+			// Try decryption
+			plaintext, err := encryptor.Decrypt(fullCiphertext)
+			if err == nil {
+				// Success! This is the real shard for realIdx
+				recovered[realIdx] = plaintext
+				usedPositions[pos] = true
+				found = true
+				break
+			}
+			// Decryption failed - either decoy or wrong real shard
+		}
+
+		if !found {
+			return nil, fmt.Errorf("failed to recover shard %d: no matching shard found", realIdx)
+		}
+	}
+
+	// Reassemble data in order
+	var result []byte
+	for i := 0; i < realCount; i++ {
+		data, ok := recovered[i]
+		if !ok {
+			return nil, fmt.Errorf("missing recovered shard %d", i)
+		}
+		result = append(result, data...)
+	}
+
+	return result, nil
+}
+
+// deriveKeyForPosition derives a key for a specific bundle and position.
+// Wrapper method for use by test helpers.
+func (s *Service) deriveKeyForPosition(bundleID string, position uint32) []byte {
+	if s.hkdfManager == nil {
+		return nil
+	}
+	key, _ := s.hkdfManager.DeriveKeyForPosition(bundleID, position)
+	return key
+}
+
+// encryptShardAEAD encrypts shard data using AEAD.
+func (s *Service) encryptShardAEAD(plaintext, key []byte) (ciphertext, nonce []byte, err error) {
+	encryptor, err := crypto.NewAEADEncryptor(key)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	fullCiphertext, err := encryptor.Encrypt(plaintext)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Split nonce and ciphertext
+	return fullCiphertext[24:], fullCiphertext[:24], nil
+}
+
+// decryptShardAEAD decrypts shard data using AEAD.
+func (s *Service) decryptShardAEAD(ciphertext, nonce, key []byte) ([]byte, error) {
+	encryptor, err := crypto.NewAEADEncryptor(key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Combine nonce and ciphertext
+	fullCiphertext := make([]byte, len(nonce)+len(ciphertext))
+	copy(fullCiphertext[:len(nonce)], nonce)
+	copy(fullCiphertext[len(nonce):], ciphertext)
+
+	return encryptor.Decrypt(fullCiphertext)
+}
+
 func (s *Service) storeOwnershipProof(assetID string, proof *interfaces.OwnershipProof) error {
 	key := fmt.Sprintf("proof_%s", assetID)
-	value := fmt.Sprintf("%s|%s|%d",
+	// SECURITY: Store ProofBytes for verification during unlock
+	// Format: AssetCommitmentHex|OwnerAddressHex|Timestamp|ProofBytesHex
+	value := fmt.Sprintf("%s|%s|%d|%s",
 		hex.EncodeToString(proof.AssetCommitment),
 		hex.EncodeToString(proof.OwnerAddress),
 		proof.Timestamp,
+		hex.EncodeToString(proof.ProofBytes),
 	)
 	// Use storageManager if available (for tests), otherwise use storage
 	if s.storageManager != nil {
@@ -1664,10 +2231,10 @@ func (s *Service) getOwnershipProof(assetID string) (*crypto.OwnershipProof, err
 		return nil, err
 	}
 
-	// Parse pipe-delimited format: AssetCommitmentHex|OwnerAddressHex|Timestamp
+	// Parse pipe-delimited format: AssetCommitmentHex|OwnerAddressHex|Timestamp|ProofBytesHex
 	parts := strings.Split(string(data), "|")
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("invalid proof format: expected 3 fields, got %d", len(parts))
+	if len(parts) < 3 {
+		return nil, fmt.Errorf("invalid proof format: expected at least 3 fields, got %d", len(parts))
 	}
 
 	// Decode hex fields
@@ -1687,12 +2254,28 @@ func (s *Service) getOwnershipProof(assetID string) (*crypto.OwnershipProof, err
 		return nil, fmt.Errorf("invalid Timestamp: %w", err)
 	}
 
-	return &crypto.OwnershipProof{
+	proof := &crypto.OwnershipProof{
 		AssetCommitment: assetCommitment,
 		OwnerAddress:    ownerAddress,
 		Timestamp:       timestamp,
-		// Note: Proof field is not serialized in storeOwnershipProof()
-	}, nil
+	}
+
+	// SECURITY: Deserialize groth16.Proof if present (field 4)
+	if len(parts) >= 4 && parts[3] != "" {
+		proofBytes, err := hex.DecodeString(parts[3])
+		if err != nil {
+			return nil, fmt.Errorf("invalid ProofBytes hex: %w", err)
+		}
+		if len(proofBytes) > 0 {
+			// Deserialize groth16.Proof using gnark's ReadFrom
+			proof.Proof = groth16.NewProof(ecc.BN254)
+			if _, err := proof.Proof.ReadFrom(bytes.NewReader(proofBytes)); err != nil {
+				return nil, fmt.Errorf("failed to deserialize groth16.Proof: %w", err)
+			}
+		}
+	}
+
+	return proof, nil
 }
 
 // GetAssetStatus retrieves the current status of an asset
