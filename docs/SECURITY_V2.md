@@ -1,8 +1,8 @@
 # LockBox V2 Security Architecture
 
-**Version:** 2.0
+**Version:** 2.1
 **Date:** 2025-12-26
-**Status:** Production Ready
+**Status:** Production Ready (under stated assumptions)
 
 ---
 
@@ -11,69 +11,69 @@
 1. [Overview](#overview)
 2. [Threat Model](#threat-model)
 3. [Cryptographic Primitives](#cryptographic-primitives)
-4. [Shard Indistinguishability](#shard-indistinguishability)
-5. [Trial Decryption Algorithm](#trial-decryption-algorithm)
+4. [Shard Format](#shard-format)
+5. [Security Goals](#security-goals)
 6. [Key Derivation](#key-derivation)
-7. [Decoy Generation](#decoy-generation)
-8. [DoS Protection](#dos-protection)
-9. [Security Hardening](#security-hardening)
-10. [API Security](#api-security)
-11. [Known Limitations](#known-limitations)
+7. [AAD Binding](#aad-binding)
+8. [Decoy Generation](#decoy-generation)
+9. [Trial Decryption Algorithm](#trial-decryption-algorithm)
+10. [DoS Protection](#dos-protection)
+11. [Implementation Hardening](#implementation-hardening)
+12. [API Security Boundary](#api-security-boundary)
+13. [Known Limitations](#known-limitations)
+14. [References](#references)
 
 ---
 
 ## Overview
 
-LockBox V2 implements a cryptographic asset locking system with **shard indistinguishability** — storage nodes cannot distinguish between real and decoy data shards. This document describes the security architecture, threat model, and implementation details.
+LockBox V2 implements a client-side cryptographic asset locking system with **shard indistinguishability**: storage cannot distinguish real data shards from decoy shards.
 
-### Key Security Properties
+### Key Properties
 
 | Property | Description |
 |----------|-------------|
-| **Confidentiality** | Data encrypted with ChaCha20-Poly1305 AEAD |
+| **Confidentiality** | XChaCha20-Poly1305 AEAD |
 | **Integrity** | AEAD authentication prevents tampering |
-| **Indistinguishability** | Real/decoy shards cryptographically identical |
-| **Forward Secrecy** | Per-bundle salt prevents cross-bundle correlation |
-| **DoS Resistance** | Limits on shard count and size |
+| **Shard indistinguishability** | Real/decoy shards share identical structure & sizes |
+| **Cross-bundle unlinkability** | Per-bundle salt prevents correlating keys across bundles |
+| **DoS resistance** | Strict bounds on shard count/size + recovery timeout |
 
 ---
 
 ## Threat Model
 
-### Assets to Protect
+### Terminology (Critical)
 
-| Asset | Classification | Protection |
-|-------|---------------|------------|
-| Plaintext data | SECRET | Never leaves client unencrypted |
-| Master key | SECRET | HSM/KeyStore, never in storage |
-| Salt (per-bundle) | STORED | Required for recovery, stored with metadata |
-| Bundle ID | PUBLIC | Used in key derivation |
-| Shard positions | HIDDEN | Not stored, recovered via trial decryption |
+| Term | Definition |
+|------|------------|
+| **realIndex** | Logical index of a real shard in the reconstructed sequence, `0..RealCount-1`. Also the key derivation index. |
+| **storagePos** | Physical position in the stored shard array after mixing/shuffling, `0..TotalShards-1`. |
 
-### Attacker Capabilities
+### Assets
 
-#### Level 1: Passive Storage Access
-- ✅ Can read all shard bytes
-- ✅ Can read asset metadata (without ShardIndexMap)
-- ✅ Knows bundleID, totalShards, tier
-- ❌ Does NOT have master key
-- ❌ Cannot modify storage
-- ❌ Cannot observe client operations
+| Asset | Classification | Notes |
+|-------|---------------|-------|
+| Plaintext data | SECRET | Never stored |
+| Master key | SECRET | Client HSM/KeyStore only |
+| Per-bundle salt | STORED | Stored in metadata; required for recovery |
+| bundleID | PUBLIC | Used for domain separation |
+| Mapping realIndex→storagePos | HIDDEN | NOT stored; derived via trial decryption |
 
-**Mitigations:** Encryption, shard indistinguishability
+### Attacker Levels
+
+#### Level 1: Passive Storage Read
+- Reads all shard bytes + metadata
+- Knows bundleID, TotalShards, RealCount, tier
+- No master key, no modification, no client observation
 
 #### Level 2: Active Storage + Observation
-- All Level 1 capabilities, plus:
-- ✅ Can replace/inject shards
-- ✅ Can observe I/O patterns
-- ✅ Can measure operation timing
-- ✅ Can add fake shards (DoS attempt)
-
-**Mitigations:** AEAD integrity, timing protection, DoS limits, position shuffling
+- Can inject/replace shards
+- Can observe I/O and coarse timing of client operations
+- Can attempt DoS via shard inflation
 
 #### Level 3: Compromised Client (Out of Scope)
-- Has master key → full compromise
-- **Not defended against** — physical/endpoint security required
+- Master key exposed → full compromise
 
 ---
 
@@ -82,171 +82,120 @@ LockBox V2 implements a cryptographic asset locking system with **shard indistin
 ### Encryption: XChaCha20-Poly1305
 
 ```
-Algorithm: XChaCha20-Poly1305 AEAD
-Key size:  256 bits (32 bytes)
-Nonce:     192 bits (24 bytes) - random per shard
-Tag:       128 bits (16 bytes)
+Algorithm:  XChaCha20-Poly1305 AEAD
+Key:        32 bytes
+Nonce:      24 bytes (random per shard)
+Tag:        16 bytes (appended as part of ciphertext)
 ```
 
-**Why XChaCha20:**
-- Extended nonce (24 bytes) allows random nonce generation
-- No nonce collision concerns with random generation
-- Fast in software, constant-time implementation
-- AEAD provides authentication + encryption
-
-### Key Derivation: HKDF-SHA256
+### KDF: HKDF-SHA256 (RFC 5869)
 
 ```
-Algorithm: HKDF-SHA256 (RFC 5869)
-IKM:       Master key (32 bytes)
-Salt:      Per-bundle random (32 bytes)
-Info:      "LockBox:shard:{bundleID}:{position}"
-Output:    256 bits (32 bytes)
+IKM:    masterKey (32 bytes)
+salt:   bundleSalt (32 bytes, CSPRNG)
+info:   "LockBox:shard" || 0x00 || bundleID || 0x00 || realIndexBE32
+Output: 32 bytes
 ```
 
-**Domain Separation:**
-```go
-info := fmt.Sprintf("LockBox:shard:%s:%d", bundleID, position)
-key := HKDF-Expand(PRK, info, 32)
-```
-
-### Additional Authenticated Data (AAD)
-
-```
-AAD Format: [bundleHash[0:4] || position]
-            4 bytes        || 4 bytes = 8 bytes total
-
-bundleHash = SHA256(bundleID)
-position   = uint32 big-endian
-```
-
-**Purpose:** Binds ciphertext to specific bundle and position, prevents shard relocation attacks.
+**Note:** This document uses `realIndex` as the KDF key selector (not `storagePos`).
 
 ---
 
-## Shard Indistinguishability
+## Shard Format
 
-### Problem Statement
+All shards (real + decoy) are stored in the same binary format.
 
-Storage nodes should not be able to determine which shards contain real data vs. decoy data. Any distinguishing information leaks privacy.
+### ShardBlob (bytes)
 
-### V1 Vulnerability (FIXED)
-
-```go
-// V1 INSECURE: ShardIndexMap stored with asset
-asset := &LockedAsset{
-    ShardIndexMap: map[uint32]uint32{0: 5, 1: 12, 2: 3}, // LEAKED!
-}
+```
+[ Magic(4) | Ver(1) | Flags(1) | Rsv(2) | Nonce(24) | Ciphertext(N) ]
 ```
 
-**Issue:** Direct mapping revealed real shard positions.
+| Field | Size | Value |
+|-------|------|-------|
+| Magic | 4 | `"LB2S"` (0x4C423253) |
+| Ver | 1 | `0x02` |
+| Flags | 1 | Reserved, `0x00` |
+| Rsv | 2 | Reserved, `0x0000` |
+| Nonce | 24 | XChaCha20 nonce (random) |
+| Ciphertext | N | `Enc(plaintext) + Tag(16)` |
 
-### V2 Solution: Trial Decryption
+**Indistinguishability rule:** Decoys MUST match the exact same `plaintextLen` and thus the same `Ciphertext(N)` length.
 
-```go
-// V2 SECURE: No ShardIndexMap stored
-asset := &LockedAsset{
-    TotalShards: 192,
-    RealCount:   64,
-    Salt:        randomSalt,  // For HKDF recovery
-    // ShardIndexMap: NOT STORED
-}
-```
+### Size Calculation
 
-**Recovery:** Try all possible keys until AEAD authentication succeeds.
+For `plaintextLen = 4096`:
+- `CiphertextLen = 4096 + 16 = 4112`
+- `HeaderLen = 4 + 1 + 1 + 2 = 8`
+- `NonceLen = 24`
+- `ShardBlobLen = 8 + 24 + 4112 = 4144`
 
 ---
 
-## Trial Decryption Algorithm
+## Security Goals
 
-### Overview
+1. **Indistinguishability:** Without master key, attacker cannot decide if a given shard is real or decoy with advantage beyond negligible.
 
-Without knowing which shards are real, the client tries decryption keys against all shards. AEAD authentication succeeds only for the correct key.
+2. **Binding / Relocation Resistance:** A valid shard must only decrypt under its intended `(bundleID, realIndex)` context.
 
-### Algorithm (Pseudocode)
+3. **Constant-Work Recovery:** Unlock performs a **fixed** number of AEAD open attempts (`TotalShards × RealCount`) to reduce timing leakage from early success.
 
-```
-function RecoverShards(bundleID, shards[], realCount, salt):
-    hkdf = HKDF.init(masterKey, salt)
-    recovered = {}
-    usedKeys = {}
-
-    positions = shuffle([0..len(shards)-1])  // Random order
-
-    for pos in positions:
-        shard = shards[pos]
-
-        for keyIdx in [0..realCount-1]:
-            if keyIdx in usedKeys:
-                continue
-
-            key = hkdf.derive("LockBox:shard:{bundleID}:{keyIdx}")
-            aad = bundleHash[0:4] || keyIdx
-
-            plaintext, err = ChaCha20Poly1305.Open(shard.ciphertext, key, shard.nonce, aad)
-
-            if err == nil:
-                recovered[keyIdx] = plaintext
-                usedKeys.add(keyIdx)
-                // DO NOT BREAK - continue for constant time
-
-    if len(recovered) != realCount:
-        return ERROR("incomplete recovery")
-
-    return reassemble(recovered)
-```
-
-### Complexity Analysis
-
-| Tier | Real | Total | Attempts | Time |
-|------|------|-------|----------|------|
-| Basic | 16 | 24 | 384 | ~1ms |
-| Standard | 32 | 64 | 2,048 | ~3ms |
-| Premium | 48 | 120 | 5,760 | ~8ms |
-| Elite | 64 | 192 | 12,288 | ~14ms |
-
-**Performance:** ~900,000 attempts/second on modern hardware.
-
-### Security Properties
-
-1. **No Early Exit:** Loop continues after finding match (timing protection)
-2. **Shuffled Order:** Random position order (I/O pattern protection)
-3. **Full Cycle:** All positions checked regardless of results
+4. **Bounded Resource Usage:** Unlock time and memory are bounded under attacker-controlled storage inputs.
 
 ---
 
 ## Key Derivation
 
-### Per-Shard Key Derivation
+### Per-realIndex Key
+
+```
+PRK = HKDF-Extract(salt=bundleSalt, IKM=masterKey)
+key(realIndex) = HKDF-Expand(PRK, info(bundleID, realIndex), 32)
+```
+
+### Go-style Info Encoding (Canonical, Unambiguous)
 
 ```go
-func DeriveKeyForPosition(bundleID string, position uint32) []byte {
-    info := []byte("LockBox:shard:")
-    info = append(info, []byte(bundleID)...)
-    info = append(info, ':')
-
-    posBytes := make([]byte, 4)
-    binary.BigEndian.PutUint32(posBytes, position)
-    info = append(info, posBytes...)
-
-    return hkdf.Expand(prk, info, 32)
+func shardInfo(bundleID string, realIndex uint32) []byte {
+    b := make([]byte, 0, 32+len(bundleID)+4)
+    b = append(b, []byte("LockBox:shard")...)
+    b = append(b, 0x00)
+    b = append(b, []byte(bundleID)...)
+    b = append(b, 0x00)
+    tmp := make([]byte, 4)
+    binary.BigEndian.PutUint32(tmp, realIndex)
+    b = append(b, tmp...)
+    return b
 }
 ```
 
-### Salt Management
+---
 
-```go
-// LOCK: Generate and store salt
-salt := make([]byte, 32)
-rand.Read(salt)
-asset.Salt = salt
+## AAD Binding
 
-// UNLOCK: Restore HKDF with stored salt
-hkdf := NewHKDFManager(masterKey)
-hkdf.SetSalt(asset.Salt)
+AAD binds ciphertext to the bundle + realIndex to prevent relocation/reordering attacks.
+
+### AAD Format (36 bytes)
+
+```
+AAD = SHA256(bundleID)[0:32] || realIndexBE32[0:4]
+      ────────────────────      ────────────────
+           32 bytes                 4 bytes
 ```
 
-**Critical:** Salt MUST be persisted with asset metadata. Without salt, recovery is impossible.
+**Rationale:** Full 32-byte hash avoids "32-bit binding" weakness; cost is negligible.
+
+### Go Implementation
+
+```go
+func buildAAD(bundleID string, realIndex uint32) []byte {
+    aad := make([]byte, 36)
+    hash := sha256.Sum256([]byte(bundleID))
+    copy(aad[0:32], hash[:])
+    binary.BigEndian.PutUint32(aad[32:36], realIndex)
+    return aad
+}
+```
 
 ---
 
@@ -254,36 +203,32 @@ hkdf.SetSalt(asset.Salt)
 
 ### Requirements
 
-1. Decoys must be **structurally identical** to real shards
-2. Decoys must use **random keys** (not derived from master key)
-3. Decoys are **never decrypted** — keys are ephemeral
+1. Same `ShardBlob` format as real shards (including headers, nonce length, ciphertext length)
+2. Keys **independent** of master key (pure random)
+3. Fixed `plaintextLen` equal to real shards
 
-### Implementation
+### Reference Implementation
 
 ```go
-func GenerateDecoy(size int) *Shard {
-    // Random key - NOT derived from master key
-    decoyKey := make([]byte, 32)
-    rand.Read(decoyKey)
+func GenerateDecoy(plaintextLen int) ShardBlob {
+    // Independent from masterKey - pure random
+    decoyKey := randBytes(32)
     defer clearBytes(decoyKey)
 
-    // Random plaintext
-    plaintext := make([]byte, size)
-    rand.Read(plaintext)
+    nonce := randBytes(24)          // XChaCha nonce
+    pt := randBytes(plaintextLen)   // Random plaintext (same size as real)
+    defer clearBytes(pt)
 
-    // Random nonce
-    nonce := make([]byte, 24)
-    rand.Read(nonce)
+    aead, _ := chacha20poly1305.NewX(decoyKey)
+    ct := aead.Seal(nil, nonce, pt, nil)  // No AAD for decoys
 
-    // Encrypt like real shard
-    aead := chacha20poly1305.NewX(decoyKey)
-    ciphertext := aead.Seal(nil, nonce, plaintext, nil)
-
-    return &Shard{Nonce: nonce, Ciphertext: ciphertext}
+    return BuildShardBlobV2(nonce, ct)
 }
 ```
 
-### Why Random Keys?
+### Why Random Decoy Keys?
+
+Eliminates any accidental linkage between decoys and the HKDF structure. Reduces risk of future protocol changes introducing a key-confirmation oracle.
 
 **Attack scenario with derived keys:**
 ```
@@ -295,157 +240,312 @@ If decryption succeeds → confirms master key guess
 
 ---
 
+## Trial Decryption Algorithm
+
+### Design Requirement: Constant-Work
+
+Unlock MUST perform exactly `TotalShards × RealCount` AEAD open attempts.
+Finding matches MUST NOT reduce the number of crypto operations.
+
+### Pseudocode (Constant-Work)
+
+```
+Recover(bundleID, shardBlobs[], RealCount, bundleSalt):
+
+    PRK = HKDF-Extract(bundleSalt, masterKey)
+
+    // Pre-derive all keys and AADs
+    keys[0..RealCount-1] = derive all keys
+    aad[0..RealCount-1]  = SHA256(bundleID) || realIndexBE32
+
+    recovered[realIndex] = nil
+    matchedShards[realIndex] = -1   // Track which storagePos matched
+    shardMatches[storagePos] = -1   // Track which realIndex this shard matched
+
+    // Deterministic permutation (unpredictable to storage attacker)
+    permSeed = HMAC-SHA256(PRK, "perm")
+    positions = DeterministicShuffle(0..TotalShards-1, permSeed)
+
+    // CONSTANT-WORK: Always execute ALL iterations
+    for storagePos in positions:
+        shard = ParseShardBlobV2(shardBlobs[storagePos])
+        if shard.invalidFormat:
+            continue  // Format check is constant-time/cost-bounded
+
+        for realIndex in 0..RealCount-1:
+            // ALWAYS execute AEAD open - no skipping
+            pt, err = AEAD_Open(
+                keys[realIndex],
+                shard.nonce,
+                shard.ciphertext,
+                aad[realIndex]
+            )
+
+            // Record result but DO NOT break or skip
+            if err == nil:
+                if recovered[realIndex] != nil:
+                    // FAIL-CLOSED: Multiple shards for same realIndex
+                    return ERROR("duplicate match for realIndex")
+                if shardMatches[storagePos] != -1:
+                    // FAIL-CLOSED: Same shard matches multiple keys
+                    return ERROR("shard matches multiple keys")
+
+                recovered[realIndex] = pt
+                matchedShards[realIndex] = storagePos
+                shardMatches[storagePos] = realIndex
+
+    // Verify complete recovery
+    if count(recovered) != RealCount:
+        return ERROR("incomplete recovery")
+
+    return Reassemble(recovered[0..RealCount-1])
+```
+
+### Fail-Closed Rules
+
+| Condition | Action | Rationale |
+|-----------|--------|-----------|
+| Same realIndex matches 2+ shards | FAIL | Prevents injection attacks |
+| Same shard matches 2+ realIndexes | FAIL | Should be negligible; indicates corruption |
+| Missing any realIndex | FAIL | Incomplete recovery |
+
+### Go Implementation with Context Timeout
+
+```go
+func (s *Service) RecoverWithTimeout(
+    ctx context.Context,
+    bundleID string,
+    shards []*ShardBlob,
+    realCount int,
+    salt []byte,
+) ([]byte, error) {
+    // Enforce timeout
+    ctx, cancel := context.WithTimeout(ctx, MaxRecoveryTime)
+    defer cancel()
+
+    // Result channels
+    resultCh := make(chan recoveryResult, 1)
+
+    go func() {
+        result, err := s.recoverConstantWork(bundleID, shards, realCount, salt)
+        select {
+        case resultCh <- recoveryResult{data: result, err: err}:
+        case <-ctx.Done():
+            // Timeout - result discarded
+        }
+    }()
+
+    select {
+    case result := <-resultCh:
+        return result.data, result.err
+    case <-ctx.Done():
+        return nil, fmt.Errorf("recovery timeout: %w", ctx.Err())
+    }
+}
+
+func (s *Service) recoverConstantWork(
+    bundleID string,
+    shards []*ShardBlob,
+    realCount int,
+    salt []byte,
+) ([]byte, error) {
+    hkdf := s.hkdfManager.CloneWithSalt(salt)
+    defer hkdf.Clear()
+
+    // Pre-derive all keys
+    keys := make([][]byte, realCount)
+    aads := make([][]byte, realCount)
+    for i := 0; i < realCount; i++ {
+        keys[i] = hkdf.DeriveKey(shardInfo(bundleID, uint32(i)))
+        aads[i] = buildAAD(bundleID, uint32(i))
+        defer clearBytes(keys[i])
+    }
+
+    recovered := make(map[int][]byte)
+    matchedShards := make(map[int]int)    // realIndex -> storagePos
+    shardMatches := make(map[int]int)     // storagePos -> realIndex
+
+    positions := deterministicShuffle(len(shards), hkdf)
+
+    // CONSTANT-WORK LOOP
+    for _, storagePos := range positions {
+        shard := shards[storagePos]
+
+        for realIndex := 0; realIndex < realCount; realIndex++ {
+            // ALWAYS execute - no early exit
+            pt, err := aeadOpen(keys[realIndex], shard.Nonce, shard.Ciphertext, aads[realIndex])
+
+            if err == nil {
+                // Check fail-closed conditions
+                if _, exists := recovered[realIndex]; exists {
+                    return nil, errors.New("fail-closed: duplicate match for realIndex")
+                }
+                if _, exists := shardMatches[storagePos]; exists {
+                    return nil, errors.New("fail-closed: shard matches multiple keys")
+                }
+
+                recovered[realIndex] = pt
+                matchedShards[realIndex] = storagePos
+                shardMatches[storagePos] = realIndex
+            }
+            // Continue regardless of result
+        }
+    }
+
+    if len(recovered) != realCount {
+        return nil, fmt.Errorf("incomplete recovery: got %d, need %d", len(recovered), realCount)
+    }
+
+    return reassemble(recovered, realCount), nil
+}
+```
+
+### Complexity Analysis
+
+| Tier | Real | Total | Attempts | Expected Time* |
+|------|------|-------|----------|----------------|
+| Basic | 16 | 24 | 384 | ~0.5ms |
+| Standard | 32 | 64 | 2,048 | ~2ms |
+| Premium | 48 | 120 | 5,760 | ~6ms |
+| Elite | 64 | 192 | 12,288 | ~14ms |
+
+*Benchmarked on Apple M1, Go 1.21, shards in RAM, single-thread.
+
+---
+
 ## DoS Protection
 
-### Limits
+### Hard Limits (V2)
 
 ```go
 const (
-    MaxTotalShards = 256      // Elite uses 192, buffer provided
-    MaxShardSize   = 4096 + 16 // Plaintext + auth tag
-    MaxRecoveryTime = 60 * time.Second
+    // Shard limits
+    MaxPlaintextLen      = 4096
+    MaxCiphertextLen     = MaxPlaintextLen + 16  // + auth tag
+    MaxShardBlobLen      = 8 + 24 + MaxCiphertextLen  // header + nonce + ct
+
+    // Bundle limits
+    MaxTotalShards       = 256
+    MaxRealCount         = 64
+    MaxTotalShardBytes   = MaxTotalShards * MaxShardBlobLen
+
+    // Time limits
+    MaxRecoveryTime      = 60 * time.Second
 )
 ```
 
-### Validation
+### Validation Rules
 
 ```go
-func validateShards(shards []*Shard) error {
+func validateRecoveryInput(shards []*ShardBlob, realCount int) error {
     if len(shards) > MaxTotalShards {
         return ErrTooManyShards
     }
+    if realCount > MaxRealCount {
+        return ErrTooManyRealShards
+    }
+    if realCount > len(shards) {
+        return ErrInvalidShardCount
+    }
 
+    totalBytes := 0
     for i, shard := range shards {
-        if len(shard.Ciphertext) > MaxShardSize {
+        if len(shard.Raw) > MaxShardBlobLen {
             return fmt.Errorf("shard %d: %w", i, ErrShardTooLarge)
         }
+        totalBytes += len(shard.Raw)
+    }
+
+    if totalBytes > MaxTotalShardBytes {
+        return ErrTotalSizeTooLarge
     }
 
     return nil
 }
 ```
 
-### Attack Mitigation
-
-| Attack | Mitigation |
-|--------|------------|
-| Shard inflation | MaxTotalShards limit |
-| Large shard injection | MaxShardSize limit |
-| CPU exhaustion | Recovery timeout |
-| Memory exhaustion | Size validation before allocation |
-
 ---
 
-## Security Hardening
+## Implementation Hardening
 
-### Timing Attack Prevention
+### Timing / Work Normalization
+
+- Unlock performs **fixed count** of AEAD opens: `TotalShards × RealCount`
+- **No break** in either loop
+- Avoid data-dependent I/O: load shard blobs uniformly
+
+### I/O Ordering
+
+Use a keyed deterministic permutation:
+- **Deterministic** for reproducibility and testing
+- **Unpredictable** to storage attacker without master key
 
 ```go
-// WRONG: Early exit leaks timing
-for _, shard := range shards {
-    if decrypt(shard) == nil {
-        break  // Timing leak!
-    }
-}
+func deterministicShuffle(n int, hkdf *HKDFManager) []int {
+    seed := hkdf.DeriveKey([]byte("LockBox:perm"))
+    defer clearBytes(seed)
 
-// CORRECT: Full cycle always
-for _, shard := range shards {
-    result := decrypt(shard)
-    if result != nil && found == nil {
-        found = result
-        // Continue - don't break
+    positions := make([]int, n)
+    for i := range positions {
+        positions[i] = i
     }
+
+    // Fisher-Yates with deterministic PRNG
+    rng := newDeterministicRNG(seed)
+    for i := n - 1; i > 0; i-- {
+        j := rng.Intn(i + 1)
+        positions[i], positions[j] = positions[j], positions[i]
+    }
+
+    return positions
 }
 ```
 
-### I/O Pattern Protection
+### Memory Hygiene
 
 ```go
-// WRONG: Sequential access
-for i := 0; i < len(shards); i++ {
-    process(shards[i])  // Predictable pattern
-}
-
-// CORRECT: Shuffled access
-positions := shuffle(range(len(shards)))
-for _, pos := range positions {
-    process(shards[pos])  // Random pattern
-}
-```
-
-### Memory Security
-
-```go
-// Clear sensitive data after use
-defer clearBytes(masterKey)
+// Zeroize derived keys after use
 defer clearBytes(derivedKey)
 defer hkdfManager.Clear()
+
+// Avoid logging decryption errors per-key/per-shard
+// Only log aggregate failure
 ```
 
 ---
 
-## API Security
+## API Security Boundary
 
-### Access Token Validation
+This document covers **shard encryption format + recovery**.
 
-```go
-func validateAccessToken(token string) bool {
-    // HMAC-SHA256 validation
-    expected := hmac.New(sha256.New, hmacKey)
-    expected.Write(tokenData)
-    return hmac.Equal(expected.Sum(nil), providedMAC)
-}
-```
+API mechanisms (tokens, request nonces, ZKP ownership proofs) are separate components and must be specified in their own protocol documents.
 
-### Nonce Replay Protection
+### Important Distinction
 
-```go
-func checkNonce(nonce []byte) bool {
-    // Check timestamp freshness (5 minute window)
-    timestamp := extractTimestamp(nonce)
-    if time.Since(timestamp) > 5*time.Minute {
-        return false
-    }
+| Concept | Scope | Size | Purpose |
+|---------|-------|------|---------|
+| **AEAD nonce** | Per-shard encryption | 24 bytes | XChaCha20 IV |
+| **API request nonce** | Request authentication | Variable | Replay protection |
 
-    // Check nonce not reused
-    if nonceCache.Contains(nonce) {
-        return false
-    }
-
-    nonceCache.Add(nonce)
-    return true
-}
-```
-
-### Ownership Proof
-
-```go
-// ZKP-based ownership verification
-proof := zkp.GenerateOwnershipProof(assetID, ownerSecret)
-if !zkp.Verify(proof) {
-    return ErrOwnershipProofRequired
-}
-```
+**CRITICAL:** These are different concepts. API request nonces MUST NOT reuse AEAD nonce fields or formats.
 
 ---
 
 ## Known Limitations
 
-### Information Leakage (Accepted)
+### Accepted Leakage
 
 | Leak | Severity | Notes |
 |------|----------|-------|
-| totalShards visible | LOW | File count reveals this |
-| Tier inferrable | LOW | From totalShards |
-| Recovery timing | LOW | Parallel processing masks |
+| TotalShards visible | LOW | Observable from storage object count |
+| Tier inferable | LOW | Derived from TotalShards |
+| Residual client side-channels | MEDIUM | Constant-work reduces but doesn't eliminate |
 
-### Not Protected Against
+### Out of Scope
 
-| Threat | Reason |
-|--------|--------|
-| Compromised client | Master key exposed |
-| Side-channel on client | HSM recommended for production |
-| Quantum computers | ChaCha20 not post-quantum |
+- Compromised client / stolen master key
+- Strong side-channel attackers on client hardware
+- Post-quantum security (ChaCha20 is not PQ-resistant)
 
 ### Recommendations
 
@@ -460,8 +560,8 @@ if !zkp.Verify(proof) {
 
 - [RFC 8439: ChaCha20-Poly1305](https://tools.ietf.org/html/rfc8439)
 - [RFC 5869: HKDF](https://tools.ietf.org/html/rfc5869)
-- [XChaCha20 Draft](https://tools.ietf.org/html/draft-irtf-cfrg-xchacha)
-- [OWASP Cryptographic Storage](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html)
+- [XChaCha20-Poly1305 (libsodium spec)](https://doc.libsodium.org/secret-key_cryptography/aead/chacha20-poly1305/xchacha20-poly1305_construction)
+- [OWASP Cryptographic Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html)
 
 ---
 
@@ -469,5 +569,6 @@ if !zkp.Verify(proof) {
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.1 | 2025-12-26 | Terminology clarification (realIndex/storagePos), 36-byte AAD, constant-work specification, fail-closed rules, ShardBlob format |
 | 2.0 | 2025-12-26 | Trial decryption, security hardening |
 | 1.0 | 2025-12-20 | Initial V2 encryption format |
