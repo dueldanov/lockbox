@@ -72,9 +72,11 @@ type LockAssetResponse struct {
 
 // UnlockAssetRequest represents a request to unlock an asset
 type UnlockAssetRequest struct {
-	AssetID       string
-	Signatures    [][]byte
-	UnlockParams  map[string]interface{}
+	AssetID      string
+	AccessToken  string                 // SECURITY: Required for authentication
+	Nonce        string                 // SECURITY: Required for replay protection (5 min window)
+	Signatures   [][]byte               // Multi-sig signatures (if multi-sig required)
+	UnlockParams map[string]interface{} // Additional params for LockScript
 }
 
 // UnlockAssetResponse represents the response from unlocking an asset

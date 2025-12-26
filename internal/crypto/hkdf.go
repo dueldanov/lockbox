@@ -159,6 +159,25 @@ func (h *HKDFManager) DeriveKeyForDecoyChar(index uint32) ([]byte, error) {
 	return h.DeriveKey(context)
 }
 
+// DeriveKeyForPosition derives a key for a shard at the given position.
+// This is the UNIFIED key derivation method for shard indistinguishability.
+//
+// SECURITY: This context does NOT contain "real" or "decoy" - all shards use
+// the same derivation format. Real shards use position=originalIndex,
+// decoy shards use position=randomHighIndex.
+//
+// Uses info string format: "LockBox:shard:{bundleID}:{position}"
+func (h *HKDFManager) DeriveKeyForPosition(bundleID string, position uint32) ([]byte, error) {
+	context := h.GetContextForPosition(bundleID, position)
+	return h.DeriveKey(context)
+}
+
+// GetContextForPosition returns the HKDF context bytes for a position.
+// Used for testing to verify no type markers are present.
+func (h *HKDFManager) GetContextForPosition(bundleID string, position uint32) []byte {
+	return []byte(fmt.Sprintf("LockBox:shard:%s:%d", bundleID, position))
+}
+
 // DeriveKeyForRealMeta derives a key for a real metadata fragment at the given index.
 // Uses info string format: "LockBoxMeta:real-meta:{index}"
 func (h *HKDFManager) DeriveKeyForRealMeta(index uint32) ([]byte, error) {
@@ -222,6 +241,19 @@ func (h *HKDFManager) GetSalt() []byte {
 	salt := make([]byte, len(h.salt))
 	copy(salt, h.salt)
 	return salt
+}
+
+// CloneWithSalt creates a new HKDFManager with the same master key but different salt.
+// Use this to restore key derivation for a bundle with its persisted salt.
+// The caller is responsible for calling Clear() on the returned manager.
+func (h *HKDFManager) CloneWithSalt(salt []byte) (*HKDFManager, error) {
+	h.mu.RLock()
+	masterKeyCopy := make([]byte, len(h.masterKey))
+	copy(masterKeyCopy, h.masterKey)
+	h.mu.RUnlock()
+
+	// Create new manager with copied master key and provided salt
+	return NewHKDFManagerWithSalt(masterKeyCopy, salt)
 }
 
 // UpdateMasterKey updates the master key (use with caution)

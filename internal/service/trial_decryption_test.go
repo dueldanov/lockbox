@@ -131,9 +131,13 @@ func TestTrialDecryptionDoSResistance(t *testing.T) {
 	const realCount = 64
 	const totalCount = 192 // 64 real + 128 decoy
 
-	// Create asset with max decoys
+	// Create asset with max decoys - need at least 64 bytes for 64 shards
+	testData := make([]byte, 128)
+	for i := range testData {
+		testData[i] = byte(i)
+	}
 	asset, shards, err := svc.lockAssetForTrialDecryption(
-		[]byte("elite tier test data with maximum decoy ratio"),
+		testData,
 		realCount,
 		totalCount,
 	)

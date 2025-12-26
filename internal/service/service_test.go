@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -90,10 +92,27 @@ func TestUnlockAsset(t *testing.T) {
 	// Wait for lock duration to expire
 	time.Sleep(2 * time.Second)
 
-	unlockReq := &UnlockAssetRequest{AssetID: lockResp.AssetID}
+	// Generate valid access token and nonce for unlock
+	accessToken, err := GenerateAccessToken()
+	require.NoError(t, err, "failed to generate access token")
+	nonce := generateTestNonce()
+	unlockReq := &UnlockAssetRequest{
+		AssetID:     lockResp.AssetID,
+		AccessToken: accessToken, // SECURITY: Use generated HMAC token
+		Nonce:       nonce,       // SECURITY: Required for replay protection
+	}
 	unlockResp, err := svc.UnlockAsset(context.Background(), unlockReq)
 	require.NoError(t, err)
 	require.Equal(t, AssetStatusUnlocked, unlockResp.Status)
+}
+
+// generateTestNonce creates a valid nonce for testing.
+// Format: timestamp_random (current time + random suffix)
+func generateTestNonce() string {
+	timestamp := time.Now().Unix()
+	randomBytes := make([]byte, 8)
+	rand.Read(randomBytes)
+	return fmt.Sprintf("%d_%x", timestamp, randomBytes)
 }
 
 // TestScriptCompilation tests the compilation of a lock script.

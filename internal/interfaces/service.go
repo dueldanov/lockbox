@@ -82,11 +82,29 @@ type LockedAsset struct {
 	CreatedAt         time.Time           `json:"created_at"`
 	UpdatedAt         time.Time           `json:"updated_at"`
 	EmergencyUnlock   bool                `json:"emergency_unlock"`
-	// ShardIndexMap maps mixed shard positions to real shard indices
-	// Used to extract real shards from decoy-mixed storage during unlock
-	ShardIndexMap     map[uint32]uint32   `json:"shard_index_map,omitempty"`
-	// ShardCount is the number of real shards (excluding decoys)
+
+	// === V2 Shard Indistinguishability Fields ===
+	// These fields support trial decryption recovery without storing type info
+
+	// TotalShards is the total number of shards (real + decoy)
+	TotalShards       int                 `json:"total_shards,omitempty"`
+
+	// RealCount is the number of real shards (used for trial decryption)
+	RealCount         int                 `json:"real_count,omitempty"`
+
+	// Salt is the bundle-specific HKDF salt for key derivation
+	// CRITICAL: Must be persisted to enable recovery after restart
+	Salt              []byte              `json:"salt,omitempty"`
+
+	// ShardCount is DEPRECATED - use RealCount instead
+	// Kept for backward compatibility during migration
 	ShardCount        int                 `json:"shard_count,omitempty"`
+
+	// ShardIndexMap is DEPRECATED - use trial decryption instead
+	// SECURITY: This field leaks shard type information to storage
+	// Will be removed in next major version. New code should NOT use this.
+	// Deprecated: Use trial decryption with TotalShards/RealCount/Salt
+	ShardIndexMap     map[uint32]uint32   `json:"shard_index_map,omitempty"`
 }
 
 // AssetService defines the interface for asset operations
@@ -122,6 +140,7 @@ type OwnershipProof struct {
 	AssetCommitment []byte
 	OwnerAddress    []byte
 	Timestamp       int64
+	ProofBytes      []byte // Serialized groth16.Proof - MUST be persisted for verification
 }
 
 // UnlockProof represents a zero-knowledge proof for unlock conditions

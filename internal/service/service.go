@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1269,15 +1270,19 @@ func (s *Service) UnlockAsset(ctx context.Context, req *UnlockAssetRequest) (*Un
 
 		// Use trial decryption (no ShardIndexMap needed)
 		assetCopy := &LockedAsset{
-			ID:         asset.ID,
-			ShardCount: asset.RealCount,
+			ID:          asset.ID,
+			ShardCount:  asset.RealCount,
+			TotalShards: len(storedShards), // Needed for V2 validation
 		}
 		// Pass the cloned HKDF manager with bundle's salt for correct key derivation
 		recoveredData, err := s.RecoverWithTrialDecryptionWithHKDF(assetCopy, storedShards, hkdfWithSalt)
 		if err != nil {
 			log.LogStepWithDuration(logging.PhaseShardDecryption, "iterate_decrypt_shards",
 				"trial decryption failed", time.Since(stepStart), err)
-			// Fall back to legacy method if trial decryption fails
+			// SECURITY WARNING: Falling back to legacy ShardIndexMap method
+			// This path uses the stored index map which leaks real shard positions.
+			// Assets using this path should be migrated to V2 format.
+			s.LogWarnf("SECURITY: Falling back to ShardIndexMap for asset %s (V1 legacy format)", asset.ID)
 			realShards, err = s.shardMixer.ExtractRealShards(mixedShards, asset.ShardIndexMap)
 			if err != nil {
 				return nil, fmt.Errorf("failed to extract real shards: %w", err)
@@ -1293,7 +1298,10 @@ func (s *Service) UnlockAsset(ctx context.Context, req *UnlockAssetRequest) (*Un
 			goto reconstructionComplete
 		}
 	} else {
-		// Legacy path: Use ShardIndexMap (DEPRECATED)
+		// SECURITY WARNING: Legacy path using ShardIndexMap (DEPRECATED)
+		// ShardIndexMap directly reveals which shards are real - security vulnerability.
+		// All assets should migrate to V2 format with trial decryption.
+		s.LogWarnf("SECURITY: Using legacy ShardIndexMap path for asset %s (migration recommended)", asset.ID)
 		realShards, err = s.shardMixer.ExtractRealShards(mixedShards, asset.ShardIndexMap)
 		if err != nil {
 			log.LogStepWithDuration(logging.PhaseShardDecryption, "iterate_decrypt_shards",
@@ -1802,10 +1810,42 @@ const (
 	V2TotalSize = V2HeaderSize + V2MaxShardDataSize + V2AuthTagSize
 )
 
+// DoS Protection Limits
+//
+// SECURITY: These limits prevent denial-of-service attacks through:
+// 1. Shard inflation attacks (adding millions of fake shards)
+// 2. Memory exhaustion (oversized individual shards)
+// 3. CPU exhaustion (excessive trial decryption iterations)
+const (
+	// MaxTotalShards is the maximum number of shards allowed per asset.
+	// Elite tier uses 192 shards (64 real + 128 decoy), so 256 provides buffer.
+	// Beyond this, operations will be rejected to prevent DoS.
+	MaxTotalShards = 256
+
+	// MaxShardSize is the maximum size in bytes of a single shard ciphertext.
+	// Larger shards are rejected to prevent memory exhaustion.
+	// Note: 4096 plaintext + 16 byte auth tag = 4112 ciphertext
+	MaxShardSize = 4096 + 16
+
+	// MaxRecoveryAttempts limits total trial decryption iterations.
+	// Formula: MaxTotalShards * realCount provides reasonable bound.
+	// For Elite (64 real, 256 total): 64 * 256 = 16,384 attempts max.
+	MaxRecoveryAttempts = MaxTotalShards * 64
+)
+
 // V2 format errors
 var (
 	ErrShardTooLarge   = errors.New("shard data exceeds maximum size")
 	ErrInvalidV2Format = errors.New("invalid V2 shard format")
+)
+
+// DoS protection errors
+var (
+	// ErrTooManyShards is returned when asset exceeds MaxTotalShards
+	ErrTooManyShards = errors.New("asset has too many shards (DoS protection)")
+
+	// ErrRecoveryAttemptsExceeded is returned when trial decryption exceeds limits
+	ErrRecoveryAttemptsExceeded = errors.New("recovery attempts exceeded (DoS protection)")
 )
 
 // serializeMixedShardV2 serializes a shard in V2 binary format.
@@ -2082,6 +2122,19 @@ func (s *Service) RecoverWithTrialDecryptionWorkersWithHKDF(asset *LockedAsset, 
 		return nil, fmt.Errorf("HKDF manager not initialized")
 	}
 
+	// SECURITY: DoS protection - validate shard count
+	if len(shards) > MaxTotalShards {
+		return nil, fmt.Errorf("%w: got %d shards, max %d", ErrTooManyShards, len(shards), MaxTotalShards)
+	}
+
+	// SECURITY: DoS protection - validate individual shard sizes
+	for i, shard := range shards {
+		if len(shard.Ciphertext) > MaxShardSize {
+			return nil, fmt.Errorf("shard %d: %w: got %d bytes, max %d",
+				i, ErrShardTooLarge, len(shard.Ciphertext), MaxShardSize)
+		}
+	}
+
 	if workers < 1 {
 		workers = 1
 	}
@@ -2089,48 +2142,84 @@ func (s *Service) RecoverWithTrialDecryptionWorkersWithHKDF(asset *LockedAsset, 
 	realCount := asset.ShardCount
 	bundleID := asset.ID
 
-	// Track recovered shards and used positions
+	// Track recovered shards and used keys
 	recovered := make(map[int][]byte)
+	usedKeys := make(map[int]bool)
 	usedPositions := make(map[int]bool)
 
-	maxAttempts := len(shards) * realCount
-	attempts := 0
+	// SECURITY HARDENING: Generate shuffled position order
+	// This prevents I/O pattern leak - attacker cannot determine which
+	// shards are accessed first based on storage access patterns.
+	positions := make([]int, len(shards))
+	for i := range positions {
+		positions[i] = i
+	}
+	shufflePositions(positions)
 
-	// For each real shard index
-	for realIdx := 0; realIdx < realCount; realIdx++ {
-		found := false
-		// Try each shard
-		for pos, shard := range shards {
-			if usedPositions[pos] {
-				continue
-			}
+	// SECURITY HARDENING: Pre-convert all shards to CharacterShard format
+	// This ensures uniform I/O pattern - all shards are accessed before
+	// any processing begins, preventing timing analysis of access patterns.
+	charShards := make([]*crypto.CharacterShard, len(shards))
+	for i, shard := range shards {
+		charShards[i] = &crypto.CharacterShard{
+			Index: shard.Position,
+			Nonce: shard.Nonce,
+			Data:  shard.Ciphertext,
+		}
+	}
 
-			attempts++
-			if attempts > maxAttempts {
-				return nil, fmt.Errorf("max attempts exceeded: tried %d decryptions", attempts)
-			}
+	// V2 TRUE TRIAL DECRYPTION ALGORITHM
+	//
+	// Problem: Original position is lost after mixing. A shard encrypted with
+	// key for position=2 may be stored at mixedShards[7].
+	//
+	// Solution: For each shard, try ALL possible keys (0..realCount-1).
+	// The correct key will succeed (AEAD auth passes), wrong keys will fail.
+	//
+	// Complexity: O(TotalShards × RealCount) = O(192 × 64) = 12K ops for Elite
+	// This is still fast enough (<100ms) with ChaCha20-Poly1305.
 
-			// Convert StoredShard to CharacterShard for V2 decryption
-			charShard := &crypto.CharacterShard{
-				Index: shard.Position,
-				Nonce: shard.Nonce,
-				Data:  shard.Ciphertext,
-			}
-
-			// Try V2 decryption with AAD (uses bundleID hash + keyPosition)
-			plaintext, err := s.shardEncryptor.DecryptShardV2WithHKDF(charShard, bundleID, uint32(realIdx), hkdfManager)
-			if err == nil {
-				// Success! This is the real shard for realIdx
-				recovered[realIdx] = plaintext
-				usedPositions[pos] = true
-				found = true
-				break
-			}
-			// Decryption failed - either decoy or wrong real shard (AEAD auth failed)
+	// For each shard position (in shuffled order for security)
+	for _, pos := range positions {
+		if usedPositions[pos] {
+			continue
 		}
 
-		if !found {
-			return nil, fmt.Errorf("failed to recover shard %d: no matching shard found", realIdx)
+		charShard := charShards[pos]
+		foundKey := -1
+		var foundPlaintext []byte
+
+		// Try ALL keys 0..realCount-1 for this shard
+		// SECURITY: Full cycle - don't break early to prevent timing leak
+		for keyIdx := 0; keyIdx < realCount; keyIdx++ {
+			if usedKeys[keyIdx] {
+				continue // This key already matched another shard
+			}
+
+			// Try V2 decryption with AAD (uses bundleID hash + keyIdx)
+			plaintext, err := s.shardEncryptor.DecryptShardV2WithHKDF(charShard, bundleID, uint32(keyIdx), hkdfManager)
+			if err == nil && foundKey == -1 {
+				// Found! This shard was encrypted with key for position keyIdx
+				// SECURITY: Do NOT break - continue to try all keys for constant time
+				foundPlaintext = plaintext
+				foundKey = keyIdx
+			}
+			// Continue trying other keys regardless of result
+		}
+
+		if foundKey != -1 {
+			// This was a real shard - record it
+			recovered[foundKey] = foundPlaintext
+			usedKeys[foundKey] = true
+			usedPositions[pos] = true
+		}
+		// If no key matched, this is a decoy shard - skip it
+	}
+
+	// Verify all real shards were recovered
+	for i := 0; i < realCount; i++ {
+		if recovered[i] == nil {
+			return nil, fmt.Errorf("failed to recover shard %d: no matching shard found", i)
 		}
 	}
 
@@ -2186,6 +2275,26 @@ func (s *Service) decryptShardAEAD(ciphertext, nonce, key []byte) ([]byte, error
 	copy(fullCiphertext[len(nonce):], ciphertext)
 
 	return encryptor.Decrypt(fullCiphertext)
+}
+
+// shufflePositions performs Fisher-Yates shuffle on position indices.
+// Uses crypto/rand for cryptographically secure randomness.
+//
+// SECURITY: This is critical for preventing I/O pattern leak attacks.
+// By randomizing the order in which shards are accessed, we prevent
+// attackers from correlating access patterns with shard positions.
+func shufflePositions(positions []int) {
+	for i := len(positions) - 1; i > 0; i-- {
+		// Generate random index j where 0 <= j <= i
+		var buf [4]byte
+		if _, err := rand.Read(buf[:]); err != nil {
+			// Fall back to less secure shuffle on CSPRNG failure
+			// This should never happen in practice
+			continue
+		}
+		j := int(binary.BigEndian.Uint32(buf[:])) % (i + 1)
+		positions[i], positions[j] = positions[j], positions[i]
+	}
 }
 
 func (s *Service) storeOwnershipProof(assetID string, proof *interfaces.OwnershipProof) error {

@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -13,6 +15,14 @@ import (
 	iotago "github.com/iotaledger/iota.go/v3"
 	"github.com/stretchr/testify/require"
 )
+
+// generateTestNonceLS creates a valid nonce for lockscript testing.
+func generateTestNonceLS() string {
+	timestamp := time.Now().Unix()
+	randomBytes := make([]byte, 8)
+	rand.Read(randomBytes)
+	return fmt.Sprintf("%d_%x", timestamp, randomBytes)
+}
 
 // setupTestServiceWithScript creates a test service with LockScript compiler initialized
 func setupTestServiceWithScript(t *testing.T) *Service {
@@ -91,8 +101,13 @@ func TestLockUnlock_NoScript(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 
+	// Generate valid access token and nonce for unlock
+	accessToken, err := GenerateAccessToken()
+	require.NoError(t, err, "failed to generate access token")
 	unlockResp, err := svc.UnlockAsset(ctx, &UnlockAssetRequest{
-		AssetID: lockResp.AssetID,
+		AssetID:     lockResp.AssetID,
+		AccessToken: accessToken,
+		Nonce:       generateTestNonceLS(),
 	})
 	require.NoError(t, err)
 	require.Equal(t, AssetStatusUnlocked, unlockResp.Status)
@@ -115,8 +130,13 @@ func TestLockUnlock_EmptyScript(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 
+	// Generate valid access token and nonce for unlock
+	accessToken, err := GenerateAccessToken()
+	require.NoError(t, err, "failed to generate access token")
 	unlockResp, err := svc.UnlockAsset(ctx, &UnlockAssetRequest{
-		AssetID: lockResp.AssetID,
+		AssetID:     lockResp.AssetID,
+		AccessToken: accessToken,
+		Nonce:       generateTestNonceLS(),
 	})
 	require.NoError(t, err)
 	require.Equal(t, AssetStatusUnlocked, unlockResp.Status)
@@ -212,9 +232,15 @@ func TestUnlockParams_PassedToScript(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 
+	// Generate valid access token and nonce for unlock
+	accessToken, err := GenerateAccessToken()
+	require.NoError(t, err, "failed to generate access token")
+
 	// Unlock with params - even though script is empty, params should be processed
 	unlockResp, err := svc.UnlockAsset(ctx, &UnlockAssetRequest{
-		AssetID: lockResp.AssetID,
+		AssetID:     lockResp.AssetID,
+		AccessToken: accessToken,
+		Nonce:       generateTestNonceLS(),
 		UnlockParams: map[string]interface{}{
 			"signature": "test-sig",
 			"message":   "test-msg",
