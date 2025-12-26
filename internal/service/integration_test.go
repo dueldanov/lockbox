@@ -54,13 +54,11 @@ func TestLockUnlockIntegration_RealFlow(t *testing.T) {
 
 // TestLockAsset_V2Format verifies LockAsset produces V2 format shards.
 //
-// EXPECTED TO FAIL until LockAsset is updated to:
-// - Generate and store Salt
-// - NOT store ShardIndexMap
+// V2 format requirements:
+// - Generate and store Salt (32 bytes)
+// - NOT store ShardIndexMap (use trial decryption instead)
 // - Set TotalShards and RealCount
 func TestLockAsset_V2Format(t *testing.T) {
-	t.Skip("PENDING: LockAsset does not yet produce V2 format - unskip after implementing")
-
 	svc := setupTestService(t)
 	ctx := context.Background()
 
@@ -92,16 +90,13 @@ func TestLockAsset_V2Format(t *testing.T) {
 
 // TestUnlockAsset_TrialDecryption verifies UnlockAsset uses trial decryption.
 //
-// EXPECTED TO FAIL until UnlockAsset is updated to:
-// - Support recovery without ShardIndexMap
-// - Use trial decryption algorithm
+// With V2 format, ShardIndexMap is NOT stored. UnlockAsset must recover
+// shards using trial decryption algorithm (try all keys until AEAD succeeds).
 func TestUnlockAsset_TrialDecryption(t *testing.T) {
-	t.Skip("PENDING: UnlockAsset does not yet support trial decryption - unskip after implementing")
-
 	svc := setupTestService(t)
 	ctx := context.Background()
 
-	// Lock asset
+	// Lock asset (V2 format - no ShardIndexMap stored)
 	lockReq := &LockAssetRequest{
 		OwnerAddress: &iotago.Ed25519Address{},
 		OutputID:     iotago.OutputID{},
@@ -110,13 +105,13 @@ func TestUnlockAsset_TrialDecryption(t *testing.T) {
 	lockResp, err := svc.LockAsset(ctx, lockReq)
 	require.NoError(t, err)
 
-	// Manually clear ShardIndexMap to force trial decryption
+	// Verify ShardIndexMap is nil (V2 format)
 	asset := svc.lockedAssets[lockResp.AssetID]
-	asset.ShardIndexMap = nil
+	require.Nil(t, asset.ShardIndexMap, "V2 format must NOT store ShardIndexMap")
 
 	time.Sleep(2 * time.Second)
 
-	// Unlock should still work via trial decryption
+	// Unlock should work via trial decryption (no ShardIndexMap needed)
 	accessToken, _ := GenerateAccessToken()
 	unlockResp, err := svc.UnlockAsset(ctx, &UnlockAssetRequest{
 		AssetID:     lockResp.AssetID,
@@ -124,7 +119,6 @@ func TestUnlockAsset_TrialDecryption(t *testing.T) {
 		Nonce:       generateTestNonce(),
 	})
 
-	// This will FAIL until UnlockAsset supports trial decryption
 	require.NoError(t, err, "UnlockAsset must work without ShardIndexMap (trial decryption)")
 	require.Equal(t, AssetStatusUnlocked, unlockResp.Status)
 }

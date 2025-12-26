@@ -339,15 +339,16 @@ func (s *Service) LockAsset(ctx context.Context, req *LockAssetRequest) (*LockAs
 	// =========================================================================
 
 	// #17 AES256GCMEncrypt - Primary AES-256-GCM encryption
+	// V2: Use EncryptDataV2 with assetID as bundleID for trial decryption compatibility
 	stepStart = time.Now()
-	shards, err := s.shardEncryptor.EncryptData(assetData)
+	shards, err := s.shardEncryptor.EncryptDataV2(assetData, assetID)
 	if err != nil {
 		log.LogStepWithDuration(logging.PhaseEncryption, "AES256GCMEncrypt",
 			"encryption failed", time.Since(stepStart), err)
 		return nil, fmt.Errorf("failed to encrypt asset data: %w", err)
 	}
 	log.LogStepWithDuration(logging.PhaseEncryption, "AES256GCMEncrypt",
-		fmt.Sprintf("dataType=assetData, shardCount=%d", len(shards)), time.Since(stepStart), nil)
+		fmt.Sprintf("dataType=assetData, shardCount=%d, format=V2", len(shards)), time.Since(stepStart), nil)
 
 	// #18 crypto/aes.NewCipher - Creates AES cipher block
 	stepStart = time.Now()
@@ -455,7 +456,7 @@ func (s *Service) LockAsset(ctx context.Context, req *LockAssetRequest) (*LockAs
 
 	// #35 shuffle - Randomizes shard order
 	stepStart = time.Now()
-	mixedShards, indexMap, err := s.shardMixer.MixShards(shards, decoys)
+	mixedShards, _, err := s.shardMixer.MixShards(shards, decoys)
 	if err != nil {
 		log.LogStepWithDuration(logging.PhaseSharding, "shuffle",
 			"shuffleFailed", time.Since(stepStart), err)
@@ -740,8 +741,9 @@ func (s *Service) LockAsset(ctx context.Context, req *LockAssetRequest) (*LockAs
 	// =========================================================================
 	stepStart = time.Now()
 
-	// Get HKDF salt for V2 format (enables trial decryption after restart)
-	bundleSalt := s.hkdfManager.GetSalt()
+	// Get HKDF salt from shardEncryptor for V2 format (enables trial decryption after restart)
+	// IMPORTANT: Must use shardEncryptor's salt since it encrypts with its own HKDF manager
+	bundleSalt := s.shardEncryptor.GetSalt()
 
 	asset := &LockedAsset{
 		ID:                assetID,
@@ -756,13 +758,12 @@ func (s *Service) LockAsset(ctx context.Context, req *LockAssetRequest) (*LockAs
 		CreatedAt:         lockTime,
 		UpdatedAt:         lockTime,
 		// V2 fields for trial decryption (shard indistinguishability)
-		TotalShards:       len(mixedShards),
-		RealCount:         len(shards),
-		Salt:              bundleSalt,
-		// DEPRECATED: ShardIndexMap is kept for backward compatibility
-		// New code should use trial decryption with TotalShards/RealCount/Salt
-		ShardIndexMap:     indexMap,
-		ShardCount:        len(shards), // DEPRECATED: use RealCount
+		TotalShards:   len(mixedShards),
+		RealCount:     len(shards),
+		Salt:          bundleSalt,
+		ShardCount:    len(shards), // DEPRECATED: use RealCount
+		// NOTE: ShardIndexMap is intentionally NOT stored in V2 format
+		// Trial decryption recovers shards without needing the index map
 	}
 
 	if err := s.storageManager.StoreLockedAsset(asset); err != nil {
@@ -1245,14 +1246,16 @@ func (s *Service) UnlockAsset(ctx context.Context, req *UnlockAssetRequest) (*Un
 
 	// V2 path: Use trial decryption if Salt is available
 	if asset.Salt != nil && len(asset.Salt) > 0 && asset.RealCount > 0 {
-		// Clone HKDF manager with bundle's persisted salt (same master key, different salt)
-		hkdfWithSalt, err := s.hkdfManager.CloneWithSalt(asset.Salt)
+		// Clone shardEncryptor with bundle's persisted salt (same master key, different salt)
+		// IMPORTANT: Must use shardEncryptor's HKDF since it was used for V2 encryption
+		clonedEncryptor, err := s.shardEncryptor.CloneWithSalt(asset.Salt)
 		if err != nil {
 			log.LogStepWithDuration(logging.PhaseShardDecryption, "iterate_decrypt_shards",
-				"failed to restore HKDF with salt", time.Since(stepStart), err)
-			return nil, fmt.Errorf("failed to restore HKDF: %w", err)
+				"failed to restore encryptor with salt", time.Since(stepStart), err)
+			return nil, fmt.Errorf("failed to restore encryptor: %w", err)
 		}
-		defer hkdfWithSalt.Clear()
+		defer clonedEncryptor.Clear()
+		hkdfWithSalt := clonedEncryptor.GetHKDFManager()
 
 		// Convert mixedShards to StoredShards for trial decryption
 		storedShards := make([]*StoredShard, len(mixedShards))
@@ -1935,9 +1938,10 @@ type StoredShard struct {
 
 // lockAssetForTrialDecryption creates an asset with mixed shards for trial decryption.
 // This is used for testing the trial decryption recovery process.
+// Uses V2 encryption format (with AAD) for compatibility with V2 trial decryption.
 func (s *Service) lockAssetForTrialDecryption(data []byte, realCount, totalCount int) (*LockedAsset, []*StoredShard, error) {
-	if s.hkdfManager == nil {
-		return nil, nil, fmt.Errorf("HKDF manager not initialized")
+	if s.shardEncryptor == nil {
+		return nil, nil, fmt.Errorf("shard encryptor not initialized")
 	}
 
 	// Generate bundle ID
@@ -1955,7 +1959,7 @@ func (s *Service) lockAssetForTrialDecryption(data []byte, realCount, totalCount
 
 	shards := make([]*StoredShard, totalCount)
 
-	// Create real shards (encrypted with position-based keys)
+	// Create real shards using V2 encryption (with AAD)
 	for i := 0; i < realCount; i++ {
 		start := i * shardSize
 		end := start + shardSize
@@ -1970,57 +1974,36 @@ func (s *Service) lockAssetForTrialDecryption(data []byte, realCount, totalCount
 			shardData = []byte{}
 		}
 
-		// Derive key for this real shard's original index
-		key, err := s.hkdfManager.DeriveKeyForPosition(bundleIDStr, uint32(i))
+		// Encrypt using V2 format (includes AAD with bundleID hash + position)
+		charShard, err := s.shardEncryptor.EncryptSingleShardV2(shardData, bundleIDStr, uint32(i))
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to derive key: %w", err)
-		}
-
-		// Encrypt with AEAD
-		encryptor, err := crypto.NewAEADEncryptor(key)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		ciphertext, err := encryptor.Encrypt(shardData)
-		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("failed to encrypt real shard %d: %w", i, err)
 		}
 
 		// Create stored shard (position will be shuffled later)
 		shards[i] = &StoredShard{
 			Position:   uint32(i), // Temporary, will be shuffled
-			Nonce:      ciphertext[:24],
-			Ciphertext: ciphertext[24:],
+			Nonce:      charShard.Nonce,
+			Ciphertext: charShard.Data,
 		}
 	}
 
-	// Create decoy shards (encrypted with random/high-index keys)
+	// Create decoy shards using V2 encryption with high-index positions
 	for i := realCount; i < totalCount; i++ {
 		// Random data for decoys
 		decoyData := make([]byte, shardSize)
 		rand.Read(decoyData)
 
-		// Derive key using high index (1000+) to avoid collision with real indices
-		key, err := s.hkdfManager.DeriveKeyForPosition(bundleIDStr, uint32(1000+i))
+		// Encrypt using V2 format with high index (1000+) to avoid collision with real indices
+		charShard, err := s.shardEncryptor.EncryptSingleShardV2(decoyData, bundleIDStr, uint32(1000+i))
 		if err != nil {
-			return nil, nil, err
-		}
-
-		encryptor, err := crypto.NewAEADEncryptor(key)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		ciphertext, err := encryptor.Encrypt(decoyData)
-		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("failed to encrypt decoy shard %d: %w", i, err)
 		}
 
 		shards[i] = &StoredShard{
 			Position:   uint32(i),
-			Nonce:      ciphertext[:24],
-			Ciphertext: ciphertext[24:],
+			Nonce:      charShard.Nonce,
+			Ciphertext: charShard.Data,
 		}
 	}
 
@@ -2038,9 +2021,11 @@ func (s *Service) lockAssetForTrialDecryption(data []byte, realCount, totalCount
 	}
 
 	// Create asset (NO ShardIndexMap!)
+	// Uses shardEncryptor's salt for V2 compatibility
 	asset := &LockedAsset{
 		ID:         bundleIDStr,
 		ShardCount: realCount,
+		Salt:       s.shardEncryptor.GetSalt(),
 		Status:     AssetStatusLocked,
 		// ShardIndexMap is intentionally NOT set
 	}
@@ -2074,12 +2059,24 @@ func (s *Service) RecoverWithTrialDecryptionWithHKDF(asset *LockedAsset, shards 
 }
 
 // RecoverWithTrialDecryptionWorkersWithHKDF is like RecoverWithTrialDecryptionWorkers but
-// allows specifying a custom HKDF manager. If hkdf is nil, uses the service's default.
+// allows specifying a custom HKDF manager. If hkdf is nil, uses the shardEncryptor's HKDF.
+// If asset has Salt, clones the shardEncryptor with that salt for proper key derivation.
 func (s *Service) RecoverWithTrialDecryptionWorkersWithHKDF(asset *LockedAsset, shards []*StoredShard, workers int, hkdf *crypto.HKDFManager) ([]byte, error) {
-	// Use provided HKDF or fall back to service's default
+	// Use provided HKDF or fall back to shardEncryptor's HKDF
 	hkdfManager := hkdf
 	if hkdfManager == nil {
-		hkdfManager = s.hkdfManager
+		if asset.Salt != nil && len(asset.Salt) > 0 {
+			// Clone shardEncryptor with asset's salt for correct key derivation
+			cloned, err := s.shardEncryptor.CloneWithSalt(asset.Salt)
+			if err != nil {
+				return nil, fmt.Errorf("failed to clone encryptor with salt: %w", err)
+			}
+			defer cloned.Clear()
+			hkdfManager = cloned.GetHKDFManager()
+		} else {
+			// Use shardEncryptor's default HKDF (for assets locked in same session)
+			hkdfManager = s.shardEncryptor.GetHKDFManager()
+		}
 	}
 	if hkdfManager == nil {
 		return nil, fmt.Errorf("HKDF manager not initialized")
@@ -2101,17 +2098,6 @@ func (s *Service) RecoverWithTrialDecryptionWorkersWithHKDF(asset *LockedAsset, 
 
 	// For each real shard index
 	for realIdx := 0; realIdx < realCount; realIdx++ {
-		// Derive key for this real index
-		key, err := hkdfManager.DeriveKeyForPosition(bundleID, uint32(realIdx))
-		if err != nil {
-			return nil, fmt.Errorf("failed to derive key for index %d: %w", realIdx, err)
-		}
-
-		encryptor, err := crypto.NewAEADEncryptor(key)
-		if err != nil {
-			return nil, err
-		}
-
 		found := false
 		// Try each shard
 		for pos, shard := range shards {
@@ -2124,13 +2110,15 @@ func (s *Service) RecoverWithTrialDecryptionWorkersWithHKDF(asset *LockedAsset, 
 				return nil, fmt.Errorf("max attempts exceeded: tried %d decryptions", attempts)
 			}
 
-			// Reconstruct ciphertext (nonce + encrypted data)
-			fullCiphertext := make([]byte, len(shard.Nonce)+len(shard.Ciphertext))
-			copy(fullCiphertext[:len(shard.Nonce)], shard.Nonce)
-			copy(fullCiphertext[len(shard.Nonce):], shard.Ciphertext)
+			// Convert StoredShard to CharacterShard for V2 decryption
+			charShard := &crypto.CharacterShard{
+				Index: shard.Position,
+				Nonce: shard.Nonce,
+				Data:  shard.Ciphertext,
+			}
 
-			// Try decryption
-			plaintext, err := encryptor.Decrypt(fullCiphertext)
+			// Try V2 decryption with AAD (uses bundleID hash + keyPosition)
+			plaintext, err := s.shardEncryptor.DecryptShardV2WithHKDF(charShard, bundleID, uint32(realIdx), hkdfManager)
 			if err == nil {
 				// Success! This is the real shard for realIdx
 				recovered[realIdx] = plaintext
@@ -2138,7 +2126,7 @@ func (s *Service) RecoverWithTrialDecryptionWorkersWithHKDF(asset *LockedAsset, 
 				found = true
 				break
 			}
-			// Decryption failed - either decoy or wrong real shard
+			// Decryption failed - either decoy or wrong real shard (AEAD auth failed)
 		}
 
 		if !found {

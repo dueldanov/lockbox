@@ -9,6 +9,7 @@ import (
 
 // newTestServiceMinimal creates a minimal service for testing without full initialization.
 // Use this for unit tests that don't need storage, ZKP, etc.
+// Includes shardEncryptor for V2 encryption/decryption tests.
 func newTestServiceMinimal(t *testing.T) *Service {
 	t.Helper()
 
@@ -22,9 +23,15 @@ func newTestServiceMinimal(t *testing.T) *Service {
 		t.Fatalf("failed to create HKDF manager: %v", err)
 	}
 
+	shardEncryptor, err := crypto.NewShardEncryptor(masterKey, 4096)
+	if err != nil {
+		t.Fatalf("failed to create shard encryptor: %v", err)
+	}
+
 	return &Service{
-		hkdfManager:  hkdf,
-		lockedAssets: make(map[string]*LockedAsset),
+		hkdfManager:    hkdf,
+		shardEncryptor: shardEncryptor,
+		lockedAssets:   make(map[string]*LockedAsset),
 		config: &ServiceConfig{
 			Tier: TierStandard,
 		},
