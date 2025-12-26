@@ -62,3 +62,17 @@ docker/data
 
 # misc
 peering.json
+
+# Go cache
+.gocache/
+
+# Claude/AI related
+.opencode/
+.specify/
+
+# Private tangle state
+private_tangle/coordinator.state
+privatedb/
+
+# Logs directory
+logs/
