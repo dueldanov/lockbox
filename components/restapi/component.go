@@ -3,6 +3,7 @@ package restapi
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -11,6 +12,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/pkg/errors"
 	"go.uber.org/dig"
+	"golang.org/x/time/rate"
 
 	"github.com/iotaledger/hive.go/app"
 	"github.com/iotaledger/hive.go/runtime/event"
@@ -43,6 +45,42 @@ var (
 	deps      dependencies
 	jwtAuth   *jwt.Auth
 )
+
+// SECURITY: IP-based rate limiter to prevent DoS attacks
+type ipRateLimiter struct {
+	limiters sync.Map
+	rate     rate.Limit
+	burst    int
+}
+
+func newIPRateLimiter(r float64, b int) *ipRateLimiter {
+	return &ipRateLimiter{
+		rate:  rate.Limit(r),
+		burst: b,
+	}
+}
+
+func (i *ipRateLimiter) getLimiter(ip string) *rate.Limiter {
+	if limiter, ok := i.limiters.Load(ip); ok {
+		return limiter.(*rate.Limiter)
+	}
+	limiter := rate.NewLimiter(i.rate, i.burst)
+	i.limiters.Store(ip, limiter)
+	return limiter
+}
+
+func rateLimitMiddleware(rl *ipRateLimiter) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			ip := c.RealIP()
+			limiter := rl.getLimiter(ip)
+			if !limiter.Allow() {
+				return echo.NewHTTPError(http.StatusTooManyRequests, "rate limit exceeded")
+			}
+			return next(c)
+		}
+	}
+}
 
 type dependencies struct {
 	dig.In
@@ -122,6 +160,18 @@ func provide(c *dig.Container) error {
 }
 
 func configure() error {
+	// SECURITY: Add rate limiting middleware if enabled
+	if ParamsRestAPI.RateLimiting.Enabled {
+		rl := newIPRateLimiter(
+			ParamsRestAPI.RateLimiting.MaxRequestsPerSecond,
+			ParamsRestAPI.RateLimiting.Burst,
+		)
+		deps.Echo.Use(rateLimitMiddleware(rl))
+		Component.LogInfof("Rate limiting enabled: %.1f req/s, burst %d",
+			ParamsRestAPI.RateLimiting.MaxRequestsPerSecond,
+			ParamsRestAPI.RateLimiting.Burst)
+	}
+
 	deps.Echo.Use(apiMiddleware())
 	setupRoutes()
 

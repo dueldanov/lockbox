@@ -21,10 +21,41 @@ import (
 )
 
 const (
-
 	// QueryParameterOutputType is used to filter for a certain output type.
 	QueryParameterOutputType = "type"
+
+	// SECURITY: Pagination parameters to prevent DoS attacks
+	QueryParameterLimit  = "limit"
+	QueryParameterOffset = "offset"
+
+	// Default and max limits for pagination
+	DefaultLimit = 100
+	MaxLimit     = 1000
 )
+
+// parsePaginationParams extracts limit and offset from query parameters.
+// SECURITY: Enforces maximum limits to prevent DoS attacks.
+func parsePaginationParams(c echo.Context) (limit int, offset int) {
+	limit = DefaultLimit
+	offset = 0
+
+	if limitStr := c.QueryParam(QueryParameterLimit); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 {
+			limit = parsed
+			if limit > MaxLimit {
+				limit = MaxLimit
+			}
+		}
+	}
+
+	if offsetStr := c.QueryParam(QueryParameterOffset); offsetStr != "" {
+		if parsed, err := strconv.Atoi(offsetStr); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
+	return limit, offset
+}
 
 func parseOutputTypeQueryParam(c echo.Context) (*iotago.OutputType, error) {
 	typeParam := strings.ToLower(c.QueryParam(QueryParameterOutputType))
@@ -53,10 +84,26 @@ func outputsIDs(c echo.Context) (*outputIDsResponse, error) {
 		return nil, err
 	}
 
-	outputIDs := []string{}
-	appendConsumerFunc := func(output *utxo.Output) bool {
-		outputIDs = append(outputIDs, output.OutputID().ToHex())
+	// SECURITY: Parse pagination to prevent DoS
+	limit, offset := parsePaginationParams(c)
 
+	outputIDs := make([]string, 0, limit)
+	count := 0
+	collected := 0
+
+	appendConsumerFunc := func(output *utxo.Output) bool {
+		// Skip until offset
+		if count < offset {
+			count++
+			return true
+		}
+		// Stop after limit reached
+		if collected >= limit {
+			return false
+		}
+		outputIDs = append(outputIDs, output.OutputID().ToHex())
+		count++
+		collected++
 		return true
 	}
 
@@ -67,7 +114,6 @@ func outputsIDs(c echo.Context) (*outputIDsResponse, error) {
 			if output.OutputType() == *filterType {
 				return appendConsumerFunc(output)
 			}
-
 			return true
 		}
 	}
@@ -88,10 +134,24 @@ func unspentOutputsIDs(c echo.Context) (*outputIDsResponse, error) {
 		return nil, err
 	}
 
-	outputIDs := []string{}
-	appendConsumerFunc := func(output *utxo.Output) bool {
-		outputIDs = append(outputIDs, output.OutputID().ToHex())
+	// SECURITY: Parse pagination to prevent DoS
+	limit, offset := parsePaginationParams(c)
 
+	outputIDs := make([]string, 0, limit)
+	count := 0
+	collected := 0
+
+	appendConsumerFunc := func(output *utxo.Output) bool {
+		if count < offset {
+			count++
+			return true
+		}
+		if collected >= limit {
+			return false
+		}
+		outputIDs = append(outputIDs, output.OutputID().ToHex())
+		count++
+		collected++
 		return true
 	}
 
@@ -102,7 +162,6 @@ func unspentOutputsIDs(c echo.Context) (*outputIDsResponse, error) {
 			if output.OutputType() == *filterType {
 				return appendConsumerFunc(output)
 			}
-
 			return true
 		}
 	}
@@ -123,10 +182,24 @@ func spentOutputsIDs(c echo.Context) (*outputIDsResponse, error) {
 		return nil, err
 	}
 
-	outputIDs := []string{}
-	appendConsumerFunc := func(spent *utxo.Spent) bool {
-		outputIDs = append(outputIDs, spent.OutputID().ToHex())
+	// SECURITY: Parse pagination to prevent DoS
+	limit, offset := parsePaginationParams(c)
 
+	outputIDs := make([]string, 0, limit)
+	count := 0
+	collected := 0
+
+	appendConsumerFunc := func(spent *utxo.Spent) bool {
+		if count < offset {
+			count++
+			return true
+		}
+		if collected >= limit {
+			return false
+		}
+		outputIDs = append(outputIDs, spent.OutputID().ToHex())
+		count++
+		collected++
 		return true
 	}
 

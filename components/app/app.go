@@ -14,7 +14,7 @@ import (
 	"github.com/dueldanov/lockbox/v2/components/debug"
 	"github.com/dueldanov/lockbox/v2/components/gossip"
 	"github.com/dueldanov/lockbox/v2/components/inx"
-	// "github.com/dueldanov/lockbox/v2/components/lockbox" // TODO: Fix import cycles
+	"github.com/dueldanov/lockbox/v2/components/lockbox"
 	"github.com/dueldanov/lockbox/v2/components/p2p"
 	"github.com/dueldanov/lockbox/v2/components/pow"
 	"github.com/dueldanov/lockbox/v2/components/profile"
@@ -70,7 +70,7 @@ Command line flags:
 			inx.Component,
 			dashboard_metrics.Component,
 			debug.Component,
-			// lockbox.Component, // TODO: Fix import cycles
+			lockbox.Component,
 		),
 	)
 }

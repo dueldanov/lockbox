@@ -16,7 +16,7 @@ jobs:
     name: common
     env:
       TEST_NAME: common
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Check out code into the Go module directory
         uses: actions/checkout@v4
@@ -49,7 +49,7 @@ jobs:
     name: value
     env:
       TEST_NAME: value
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Check out code into the Go module directory
         uses: actions/checkout@v4
@@ -82,7 +82,7 @@ jobs:
     name: migration
     env:
       TEST_NAME: migration
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Check out code into the Go module directory
         uses: actions/checkout@v4
@@ -116,7 +116,7 @@ jobs:
     name: snapshot
     env:
       TEST_NAME: snapshot
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Check out code into the Go module directory
         uses: actions/checkout@v4
@@ -149,7 +149,7 @@ jobs:
     name: autopeering
     env:
       TEST_NAME: autopeering
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Check out code into the Go module directory
         uses: actions/checkout@v4

@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -10,6 +12,8 @@ import (
 	"github.com/dueldanov/lockbox/v2/internal/crypto"
 	"github.com/dueldanov/lockbox/v2/internal/interfaces"
 	"github.com/dueldanov/lockbox/v2/internal/lockscript"
+	"github.com/dueldanov/lockbox/v2/internal/payment"
+	"github.com/dueldanov/lockbox/v2/internal/verification"
 	"github.com/iotaledger/hive.go/app/configuration"
 	appLogger "github.com/iotaledger/hive.go/app/logger"
 	"github.com/iotaledger/hive.go/kvstore/mapdb"
@@ -90,10 +94,31 @@ func TestUnlockAsset(t *testing.T) {
 	// Wait for lock duration to expire
 	time.Sleep(2 * time.Second)
 
-	unlockReq := &UnlockAssetRequest{AssetID: lockResp.AssetID}
+	// Create and confirm payment token
+	paymentToken := createTestPaymentToken(t, svc, lockResp.AssetID)
+
+	// Generate valid access token and nonce for unlock
+	accessToken, err := GenerateAccessToken()
+	require.NoError(t, err, "failed to generate access token")
+	nonce := generateTestNonce()
+	unlockReq := &UnlockAssetRequest{
+		AssetID:      lockResp.AssetID,
+		AccessToken:  accessToken,  // SECURITY: Use generated HMAC token
+		PaymentToken: paymentToken, // SECURITY: Single-use payment token
+		Nonce:        nonce,        // SECURITY: Required for replay protection
+	}
 	unlockResp, err := svc.UnlockAsset(context.Background(), unlockReq)
 	require.NoError(t, err)
 	require.Equal(t, AssetStatusUnlocked, unlockResp.Status)
+}
+
+// generateTestNonce creates a valid nonce for testing.
+// Format: timestamp_random (current time + random suffix)
+func generateTestNonce() string {
+	timestamp := time.Now().Unix()
+	randomBytes := make([]byte, 8)
+	rand.Read(randomBytes)
+	return fmt.Sprintf("%d_%x", timestamp, randomBytes)
 }
 
 // TestScriptCompilation tests the compilation of a lock script.
@@ -149,6 +174,12 @@ func setupTestService(t *testing.T) *Service {
 	storageMgr, err := NewStorageManager(memStore)
 	require.NoError(t, err)
 
+	// Create payment processor (mock mode for testing)
+	paymentProcessor := payment.NewPaymentProcessor(nil)
+
+	// Create rate limiter with default config (5 req/min)
+	rateLimiter := verification.NewRateLimiter(nil)
+
 	return &Service{
 		WrappedLogger: logger.NewWrappedLogger(logger.NewLogger("test")),
 		config: &ServiceConfig{
@@ -157,14 +188,16 @@ func setupTestService(t *testing.T) *Service {
 			MinLockPeriod: time.Second,
 			MaxLockPeriod: 365 * 24 * time.Hour,
 		},
-		shardEncryptor: shardEncryptor,
-		zkpManager:     zkpManager,
-		zkpProvider:    &MockZKPProvider{}, // Use mock for tests - avoids gnark constraint issues
-		hkdfManager:    hkdfManager,
-		decoyGenerator: decoyGenerator,
-		shardMixer:     shardMixer,
-		lockedAssets:   make(map[string]*LockedAsset),
-		pendingUnlocks: make(map[string]time.Time),
-		storageManager: storageMgr,
+		shardEncryptor:   shardEncryptor,
+		zkpManager:       zkpManager,
+		zkpProvider:      &MockZKPProvider{}, // Use mock for tests - avoids gnark constraint issues
+		hkdfManager:      hkdfManager,
+		decoyGenerator:   decoyGenerator,
+		shardMixer:       shardMixer,
+		paymentProcessor: paymentProcessor,
+		rateLimiter:      rateLimiter,
+		lockedAssets:     make(map[string]*LockedAsset),
+		pendingUnlocks:   make(map[string]time.Time),
+		storageManager:   storageMgr,
 	}
 }

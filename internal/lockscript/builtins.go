@@ -50,8 +50,8 @@ func (e *Engine) RegisterBuiltinFunctions() {
         },
         {
             Name:    "require_sigs",
-            MinArgs: 2,
-            MaxArgs: 2,
+            MinArgs: 4, // pubkeys[], message, signatures[], threshold
+            MaxArgs: 4,
             Handler: funcRequireSigs,
         },
         {
@@ -161,22 +161,38 @@ func funcVerifySig(args []interface{}) (interface{}, error) {
     return verified, nil
 }
 
+// funcRequireSigs verifies M-of-N Ed25519 signatures.
+// Arguments: pubkeys[]string, message string, signatures[]string, threshold int64
+// Returns true if at least 'threshold' signatures are valid.
 func funcRequireSigs(args []interface{}) (interface{}, error) {
-    signatures, ok1 := args[0].([]interface{})
-    threshold, ok2 := args[1].(int64)
-    
-    if !ok1 || !ok2 {
-        return nil, fmt.Errorf("require_sigs: invalid arguments")
+    pubkeys, ok1 := args[0].([]interface{})
+    message, ok2 := args[1].(string)
+    signatures, ok3 := args[2].([]interface{})
+    threshold, ok4 := args[3].(int64)
+
+    if !ok1 || !ok2 || !ok3 || !ok4 {
+        return nil, fmt.Errorf("require_sigs: expected (pubkeys[], message, signatures[], threshold)")
     }
-    
-    validSigs := 0
-    for _, sig := range signatures {
-        if s, ok := sig.(string); ok && len(s) > 0 {
+
+    if len(pubkeys) != len(signatures) {
+        return nil, fmt.Errorf("require_sigs: pubkeys and signatures arrays must have same length")
+    }
+
+    validSigs := int64(0)
+    for i := range pubkeys {
+        pubKeyHex, ok := pubkeys[i].(string)
+        sigHex, ok2 := signatures[i].(string)
+        if !ok || !ok2 || pubKeyHex == "" || sigHex == "" {
+            continue
+        }
+
+        verified, err := VerifyEd25519Signature(pubKeyHex, message, sigHex)
+        if err == nil && verified {
             validSigs++
         }
     }
-    
-    return int64(validSigs) >= threshold, nil
+
+    return validSigs >= threshold, nil
 }
 
 func funcCheckGeo(args []interface{}) (interface{}, error) {

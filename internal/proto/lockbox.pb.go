@@ -174,10 +174,17 @@ func (x *LockAssetResponse) GetStatus() string {
 }
 
 type UnlockAssetRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AssetId       string                 `protobuf:"bytes,1,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
-	Signatures    [][]byte               `protobuf:"bytes,2,rep,name=signatures,proto3" json:"signatures,omitempty"`
-	UnlockParams  map[string]string      `protobuf:"bytes,3,rep,name=unlock_params,json=unlockParams,proto3" json:"unlock_params,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	AssetId      string                 `protobuf:"bytes,1,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
+	Signatures   [][]byte               `protobuf:"bytes,2,rep,name=signatures,proto3" json:"signatures,omitempty"`
+	UnlockParams map[string]string      `protobuf:"bytes,3,rep,name=unlock_params,json=unlockParams,proto3" json:"unlock_params,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// SECURITY: Required for authentication
+	AccessToken string `protobuf:"bytes,4,opt,name=access_token,json=accessToken,proto3" json:"access_token,omitempty"`
+	// SECURITY: Required for replay protection (5 min window)
+	Nonce string `protobuf:"bytes,5,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	// PAYMENT: Required for retrieval fee payment verification
+	// Single-use token from CreatePayment response (expires in 15 min)
+	PaymentToken  string `protobuf:"bytes,6,opt,name=payment_token,json=paymentToken,proto3" json:"payment_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -231,6 +238,27 @@ func (x *UnlockAssetRequest) GetUnlockParams() map[string]string {
 		return x.UnlockParams
 	}
 	return nil
+}
+
+func (x *UnlockAssetRequest) GetAccessToken() string {
+	if x != nil {
+		return x.AccessToken
+	}
+	return ""
+}
+
+func (x *UnlockAssetRequest) GetNonce() string {
+	if x != nil {
+		return x.Nonce
+	}
+	return ""
+}
+
+func (x *UnlockAssetRequest) GetPaymentToken() string {
+	if x != nil {
+		return x.PaymentToken
+	}
+	return ""
 }
 
 type UnlockAssetResponse struct {
@@ -1047,13 +1075,16 @@ const file_lockbox_proto_rawDesc = "" +
 	"\tlock_time\x18\x02 \x01(\x03R\blockTime\x12\x1f\n" +
 	"\vunlock_time\x18\x03 \x01(\x03R\n" +
 	"unlockTime\x12\x16\n" +
-	"\x06status\x18\x04 \x01(\tR\x06status\"\xe4\x01\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\"\xc2\x02\n" +
 	"\x12UnlockAssetRequest\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x12\x1e\n" +
 	"\n" +
 	"signatures\x18\x02 \x03(\fR\n" +
 	"signatures\x12R\n" +
-	"\runlock_params\x18\x03 \x03(\v2-.lockbox.UnlockAssetRequest.UnlockParamsEntryR\funlockParams\x1a?\n" +
+	"\runlock_params\x18\x03 \x03(\v2-.lockbox.UnlockAssetRequest.UnlockParamsEntryR\funlockParams\x12!\n" +
+	"\faccess_token\x18\x04 \x01(\tR\vaccessToken\x12\x14\n" +
+	"\x05nonce\x18\x05 \x01(\tR\x05nonce\x12#\n" +
+	"\rpayment_token\x18\x06 \x01(\tR\fpaymentToken\x1a?\n" +
 	"\x11UnlockParamsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x86\x01\n" +

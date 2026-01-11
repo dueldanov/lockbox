@@ -563,7 +563,7 @@ func runRotateKeyWorkflow(logger *NEOLogger, tier service.Tier) error {
 
 // runAllWorkflows executes all 4 workflows (496 functions total)
 func runAllWorkflows(tier service.Tier, outputDir string) error {
-	fmt.Println("\n=== Running ALL Workflows (496 functions) ===\n")
+	fmt.Println("\n=== Running ALL Workflows (496 functions) ===")
 
 	workflows := []struct {
 		name     string

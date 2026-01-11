@@ -54,7 +54,7 @@
   "db": {
     "engine": "pebble",
     "path": "lockbox_devnet_db",
-    "autoRevalidation": false,
+    "autoRevalidation": true,
     "checkLedgerStateOnStartup": false
   },
   "pow": {
@@ -130,6 +130,14 @@
       "enabled": true
     },
     "debugRequestLoggerEnabled": true
+  },
+  "lockbox": {
+    "enabled": true,
+    "grpc": {
+      "bindAddress": "0.0.0.0:50051",
+      "tlsEnabled": false
+    },
+    "tier": "Standard"
   }
 }
 

@@ -34,6 +34,13 @@ message UnlockAssetRequest {
   string asset_id = 1;
   repeated bytes signatures = 2;
   map<string, string> unlock_params = 3;
+  // SECURITY: Required for authentication
+  string access_token = 4;
+  // SECURITY: Required for replay protection (5 min window)
+  string nonce = 5;
+  // PAYMENT: Required for retrieval fee payment verification
+  // Single-use token from CreatePayment response (expires in 15 min)
+  string payment_token = 6;
 }
 
 message UnlockAssetResponse {

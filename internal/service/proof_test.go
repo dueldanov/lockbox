@@ -54,10 +54,11 @@ func TestOwnershipProof_RoundTrip(t *testing.T) {
 
 // parseOwnershipProofData is a helper to test the parsing logic
 // This mimics the parsing logic in getOwnershipProof
+// Format: AssetCommitmentHex|OwnerAddressHex|Timestamp|ProofBytesHex (4th field optional)
 func parseOwnershipProofData(data []byte) (*crypto.OwnershipProof, error) {
 	parts := strings.Split(string(data), "|")
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("invalid proof format: expected 3 fields, got %d", len(parts))
+	if len(parts) < 3 {
+		return nil, fmt.Errorf("invalid proof format: expected at least 3 fields, got %d", len(parts))
 	}
 
 	assetCommitment, err := hex.DecodeString(parts[0])
@@ -75,11 +76,24 @@ func parseOwnershipProofData(data []byte) (*crypto.OwnershipProof, error) {
 		return nil, fmt.Errorf("invalid Timestamp: %w", err)
 	}
 
-	return &crypto.OwnershipProof{
+	proof := &crypto.OwnershipProof{
 		AssetCommitment: assetCommitment,
 		OwnerAddress:    ownerAddress,
 		Timestamp:       timestamp,
-	}, nil
+	}
+
+	// Parse ProofBytes if present (4th field)
+	if len(parts) >= 4 && parts[3] != "" {
+		proofBytes, err := hex.DecodeString(parts[3])
+		if err != nil {
+			return nil, fmt.Errorf("invalid ProofBytes hex: %w", err)
+		}
+		// Note: In the actual implementation, we would deserialize groth16.Proof here
+		// For tests, we just store the bytes (the Proof field in crypto.OwnershipProof is groth16.Proof)
+		_ = proofBytes // We can't set groth16.Proof without the actual deserialization
+	}
+
+	return proof, nil
 }
 
 func TestOwnershipProof_InvalidFormat(t *testing.T) {
@@ -90,7 +104,7 @@ func TestOwnershipProof_InvalidFormat(t *testing.T) {
 		{"empty string", ""},
 		{"too few fields", "aabb|ccdd"},
 		{"only one field", "aabbccdd"},
-		{"too many fields", "aabb|ccdd|123|extra"},
+		// Note: 4 fields is now VALID (ProofBytes in 4th field)
 	}
 
 	for _, tc := range tests {

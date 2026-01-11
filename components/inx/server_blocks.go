@@ -82,10 +82,10 @@ func NewINXBlockMetadata(ctx context.Context, blockID iotago.BlockID, metadata *
 		tipScore, err := deps.TipScoreCalculator.TipScore(ctx, blockID, cmi)
 		if err != nil {
 			if errors.Is(err, common.ErrOperationAborted) {
-				return nil, status.Errorf(codes.Unavailable, err.Error())
+				return nil, status.Errorf(codes.Unavailable, "%s", err.Error())
 			}
 
-			return nil, status.Errorf(codes.Internal, err.Error())
+			return nil, status.Errorf(codes.Internal, "%s", err.Error())
 		}
 
 		switch tipScore {

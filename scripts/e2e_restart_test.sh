@@ -62,7 +62,7 @@ start_node() {
     cd "$PROJECT_DIR"
 
     # Start node with gRPC enabled
-    "$NODE_BIN" --config=profiles/lockbox-devnet/config.json 2>&1 &
+    "$NODE_BIN" --config=config_lockbox_devnet.json 2>&1 &
     NODE_PID=$!
 
     echo "Node PID: $NODE_PID"

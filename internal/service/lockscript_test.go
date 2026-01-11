@@ -2,17 +2,29 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"fmt"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/dueldanov/lockbox/v2/internal/crypto"
 	"github.com/dueldanov/lockbox/v2/internal/lockscript"
+	"github.com/dueldanov/lockbox/v2/internal/payment"
+	"github.com/dueldanov/lockbox/v2/internal/verification"
 	"github.com/iotaledger/hive.go/kvstore/mapdb"
 	"github.com/iotaledger/hive.go/logger"
 	iotago "github.com/iotaledger/iota.go/v3"
 	"github.com/stretchr/testify/require"
 )
+
+// generateTestNonceLS creates a valid nonce for lockscript testing.
+func generateTestNonceLS() string {
+	timestamp := time.Now().Unix()
+	randomBytes := make([]byte, 8)
+	rand.Read(randomBytes)
+	return fmt.Sprintf("%d_%x", timestamp, randomBytes)
+}
 
 // setupTestServiceWithScript creates a test service with LockScript compiler initialized
 func setupTestServiceWithScript(t *testing.T) *Service {
@@ -48,6 +60,12 @@ func setupTestServiceWithScript(t *testing.T) *Service {
 	engine := lockscript.NewEngine(nil, 65536, 5*time.Second)
 	engine.RegisterBuiltinFunctions()
 
+	// Create payment processor (mock mode for testing)
+	paymentProcessor := payment.NewPaymentProcessor(nil)
+
+	// Create rate limiter with default config (5 req/min)
+	rateLimiter := verification.NewRateLimiter(nil)
+
 	svc := &Service{
 		WrappedLogger: logger.NewWrappedLogger(logger.NewLogger("test")),
 		config: &ServiceConfig{
@@ -56,16 +74,18 @@ func setupTestServiceWithScript(t *testing.T) *Service {
 			MinLockPeriod: time.Second,
 			MaxLockPeriod: 365 * 24 * time.Hour,
 		},
-		shardEncryptor: shardEncryptor,
-		zkpManager:     zkpManager,
-		zkpProvider:    &MockZKPProvider{},
-		hkdfManager:    hkdfManager,
-		decoyGenerator: decoyGenerator,
-		shardMixer:     shardMixer,
-		lockedAssets:   make(map[string]*LockedAsset),
-		pendingUnlocks: make(map[string]time.Time),
-		storageManager: storageMgr,
-		scriptCompiler: engine, // Enable LockScript
+		shardEncryptor:   shardEncryptor,
+		zkpManager:       zkpManager,
+		zkpProvider:      &MockZKPProvider{},
+		hkdfManager:      hkdfManager,
+		decoyGenerator:   decoyGenerator,
+		shardMixer:       shardMixer,
+		paymentProcessor: paymentProcessor,
+		rateLimiter:      rateLimiter,
+		lockedAssets:     make(map[string]*LockedAsset),
+		pendingUnlocks:   make(map[string]time.Time),
+		storageManager:   storageMgr,
+		scriptCompiler:   engine, // Enable LockScript
 	}
 
 	return svc
@@ -91,8 +111,17 @@ func TestLockUnlock_NoScript(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 
+	// Create and confirm payment token
+	paymentToken := createTestPaymentToken(t, svc, lockResp.AssetID)
+
+	// Generate valid access token and nonce for unlock
+	accessToken, err := GenerateAccessToken()
+	require.NoError(t, err, "failed to generate access token")
 	unlockResp, err := svc.UnlockAsset(ctx, &UnlockAssetRequest{
-		AssetID: lockResp.AssetID,
+		AssetID:      lockResp.AssetID,
+		AccessToken:  accessToken,
+		PaymentToken: paymentToken,
+		Nonce:        generateTestNonceLS(),
 	})
 	require.NoError(t, err)
 	require.Equal(t, AssetStatusUnlocked, unlockResp.Status)
@@ -115,8 +144,17 @@ func TestLockUnlock_EmptyScript(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 
+	// Create and confirm payment token
+	paymentToken := createTestPaymentToken(t, svc, lockResp.AssetID)
+
+	// Generate valid access token and nonce for unlock
+	accessToken, err := GenerateAccessToken()
+	require.NoError(t, err, "failed to generate access token")
 	unlockResp, err := svc.UnlockAsset(ctx, &UnlockAssetRequest{
-		AssetID: lockResp.AssetID,
+		AssetID:      lockResp.AssetID,
+		AccessToken:  accessToken,
+		PaymentToken: paymentToken,
+		Nonce:        generateTestNonceLS(),
 	})
 	require.NoError(t, err)
 	require.Equal(t, AssetStatusUnlocked, unlockResp.Status)
@@ -137,8 +175,9 @@ func TestExecuteLockScript_EmptyScript(t *testing.T) {
 	require.NoError(t, err, "Empty script should pass")
 }
 
-// TestExecuteLockScript_CompilerNotInitialized tests backward compatibility
-func TestExecuteLockScript_CompilerNotInitialized(t *testing.T) {
+// TestExecuteLockScript_CompilerNotInitialized_MustFail tests fail-closed security
+// SECURITY: If compiler is not initialized, unlock MUST be denied to prevent bypass
+func TestExecuteLockScript_CompilerNotInitialized_MustFail(t *testing.T) {
 	svc := setupTestServiceWithScript(t)
 	ctx := context.Background()
 
@@ -147,13 +186,15 @@ func TestExecuteLockScript_CompilerNotInitialized(t *testing.T) {
 
 	asset := &LockedAsset{
 		ID:           "test-asset-2",
-		LockScript:   "some_script();", // Would normally fail
+		LockScript:   "some_script();", // Has a script that should be enforced
 		OwnerAddress: &iotago.Ed25519Address{},
 	}
 
-	// Should pass because compiler is not initialized (backward compatibility)
+	// SECURITY: Must FAIL when compiler not initialized (fail-closed)
+	// This prevents bypassing LockScript conditions during startup race
 	err := svc.executeLockScript(ctx, asset, nil)
-	require.NoError(t, err, "Should pass when compiler not initialized")
+	require.Error(t, err, "SECURITY: Must fail when compiler not initialized")
+	require.Contains(t, err.Error(), "compiler not initialized")
 }
 
 // TestExecuteLockScript_InvalidScript tests that invalid script returns error
@@ -212,9 +253,19 @@ func TestUnlockParams_PassedToScript(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 
+	// Create and confirm payment token
+	paymentToken := createTestPaymentToken(t, svc, lockResp.AssetID)
+
+	// Generate valid access token and nonce for unlock
+	accessToken, err := GenerateAccessToken()
+	require.NoError(t, err, "failed to generate access token")
+
 	// Unlock with params - even though script is empty, params should be processed
 	unlockResp, err := svc.UnlockAsset(ctx, &UnlockAssetRequest{
-		AssetID: lockResp.AssetID,
+		AssetID:      lockResp.AssetID,
+		AccessToken:  accessToken,
+		PaymentToken: paymentToken,
+		Nonce:        generateTestNonceLS(),
 		UnlockParams: map[string]interface{}{
 			"signature": "test-sig",
 			"message":   "test-msg",

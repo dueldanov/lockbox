@@ -1,15 +1,145 @@
 package service
 
 import (
+	"bufio"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/dueldanov/lockbox/v2/internal/logging"
 	"github.com/google/uuid"
 )
+
+// usedNonces tracks nonces that have been used to prevent replay attacks.
+// Keys are nonce strings, values are expiration times.
+// SECURITY: Persisted to file to survive restarts (prevents replay attacks after restart).
+var (
+	usedNonces     = make(map[string]time.Time)
+	usedNoncesMu   sync.RWMutex
+	nonceWindow    = 5 * time.Minute // Nonces are valid for 5 minutes
+	nonceCleanupCh = make(chan struct{}, 1)
+	nonceFilePath  = getDataDir() + "/used_nonces.db"
+
+	// SECURITY: Token HMAC key for cryptographic verification.
+	// In production, this should be loaded from secure storage (HSM, Vault, etc.)
+	tokenHMACKey     []byte
+	tokenHMACKeyOnce sync.Once
+)
+
+// ensureTokenHMACKey initializes the HMAC key on first use (lazy init).
+// SECURITY: Panics if key is missing/invalid in production mode.
+func ensureTokenHMACKey() {
+	tokenHMACKeyOnce.Do(func() {
+		tokenHMACKey = loadTokenHMACKey()
+	})
+}
+
+// loadTokenHMACKey loads and validates the HMAC key from environment.
+func loadTokenHMACKey() []byte {
+	keyHex := os.Getenv("LOCKBOX_TOKEN_HMAC_KEY")
+	devMode := os.Getenv("LOCKBOX_DEV_MODE") == "true"
+
+	if keyHex == "" {
+		if devMode {
+			// Development mode: use deterministic key for testing
+			// WARNING: NEVER use in production!
+			fmt.Fprintln(os.Stderr, "⚠️  WARNING: Using development HMAC key. Set LOCKBOX_TOKEN_HMAC_KEY in production!")
+			keyHex = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+		} else {
+			panic("SECURITY ERROR: LOCKBOX_TOKEN_HMAC_KEY environment variable is required. " +
+				"Generate with: openssl rand -hex 32")
+		}
+	}
+
+	key, err := hex.DecodeString(keyHex)
+	if err != nil {
+		panic(fmt.Sprintf("SECURITY ERROR: LOCKBOX_TOKEN_HMAC_KEY is not valid hex: %v", err))
+	}
+	if len(key) < 32 {
+		panic(fmt.Sprintf("SECURITY ERROR: LOCKBOX_TOKEN_HMAC_KEY must be at least 32 bytes (64 hex chars), got %d bytes", len(key)))
+	}
+
+	// Check for all-zeros key (security violation)
+	allZeros := true
+	for _, b := range key {
+		if b != 0 {
+			allZeros = false
+			break
+		}
+	}
+	if allZeros && !devMode {
+		panic("SECURITY ERROR: LOCKBOX_TOKEN_HMAC_KEY cannot be all zeros in production")
+	}
+
+	return key
+}
+
+// reinitTokenHMACKey forces reinitialization of the HMAC key.
+// FOR TESTING ONLY - allows tests to set env vars before key is loaded.
+func reinitTokenHMACKey() {
+	tokenHMACKeyOnce = sync.Once{}
+	ensureTokenHMACKey()
+}
+
+// getDataDir returns the data directory for persistent storage
+func getDataDir() string {
+	dataDir := os.Getenv("LOCKBOX_DATA_DIR")
+	if dataDir == "" {
+		dataDir = "/tmp/lockbox"
+	}
+	return dataDir
+}
+
+func init() {
+	// Ensure data directory exists
+	os.MkdirAll(filepath.Dir(nonceFilePath), 0700)
+
+	// Load persisted nonces from file
+	loadNoncesFromFile()
+
+	// Start background cleanup goroutine
+	go cleanupExpiredNonces()
+}
+
+// cleanupExpiredNonces removes expired nonces from the map periodically
+// and rewrites the persistence file to remove expired entries.
+func cleanupExpiredNonces() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	cleanupCounter := 0
+	for {
+		select {
+		case <-ticker.C:
+			now := time.Now()
+			usedNoncesMu.Lock()
+			for nonce, expiry := range usedNonces {
+				if now.After(expiry) {
+					delete(usedNonces, nonce)
+				}
+			}
+			usedNoncesMu.Unlock()
+
+			// Clean up file every 10 minutes to avoid constant rewrites
+			cleanupCounter++
+			if cleanupCounter >= 10 {
+				cleanupNonceFile()
+				cleanupCounter = 0
+			}
+		case <-nonceCleanupCh:
+			return
+		}
+	}
+}
 
 // DeleteKey permanently destroys a key by securely wiping all shards across the network.
 // This operation is IRREVERSIBLE - once completed, the key cannot be recovered.
@@ -463,14 +593,246 @@ func (s *Service) DeleteKey(ctx context.Context, req *DeleteKeyRequest) (*Delete
 	}, nil
 }
 
-// validateAccessToken validates the single-use API key
+// validateAccessToken validates the single-use API key with HMAC verification.
+// Token format: "payload:hmac" where:
+//   - payload: 64 hex chars (32 bytes of token data)
+//   - hmac: 64 hex chars (HMAC-SHA256 signature)
+//
+// Legacy format (64 hex chars without HMAC) is rejected for security.
+// SECURITY: Uses constant-time comparison to prevent timing attacks.
 func (s *Service) validateAccessToken(token string) bool {
-	// TODO: Implement actual token validation against wallet DB
-	return token != ""
+	// Check token is not empty
+	if token == "" {
+		return false
+	}
+
+	// Parse token format: "payload:hmac"
+	parts := strings.SplitN(token, ":", 2)
+	if len(parts) != 2 {
+		// Legacy 64-char format - REJECT for security
+		// All tokens MUST have HMAC signature
+		return false
+	}
+
+	payload := parts[0]
+	providedHMAC := parts[1]
+
+	// Payload should be 64 hex characters (32 bytes)
+	if len(payload) != 64 {
+		return false
+	}
+
+	// HMAC should be 64 hex characters (32 bytes SHA-256)
+	if len(providedHMAC) != 64 {
+		return false
+	}
+
+	// Verify payload is valid hex
+	_, err := hex.DecodeString(payload)
+	if err != nil {
+		return false
+	}
+
+	// Decode provided HMAC
+	providedHMACBytes, err := hex.DecodeString(providedHMAC)
+	if err != nil {
+		return false
+	}
+
+	// Calculate expected HMAC
+	expectedHMAC := calculateTokenHMAC(payload)
+
+	// SECURITY: Constant-time comparison to prevent timing attacks
+	if !hmac.Equal(providedHMACBytes, expectedHMAC) {
+		return false
+	}
+
+	return true
 }
 
-// checkTokenNonce verifies the nonce-based authentication (5 min window)
+// calculateTokenHMAC computes HMAC-SHA256 for a token payload.
+func calculateTokenHMAC(payload string) []byte {
+	ensureTokenHMACKey() // Lazy init - panics in production if key missing
+	h := hmac.New(sha256.New, tokenHMACKey)
+	h.Write([]byte(payload))
+	return h.Sum(nil)
+}
+
+// GenerateAccessToken creates a new HMAC-signed access token.
+// Returns token in format "payload:hmac".
+func GenerateAccessToken() (string, error) {
+	// Generate 32 random bytes for payload
+	payload := make([]byte, 32)
+	_, err := rand.Read(payload)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate random payload: %w", err)
+	}
+
+	payloadHex := hex.EncodeToString(payload)
+	hmacBytes := calculateTokenHMAC(payloadHex)
+	hmacHex := hex.EncodeToString(hmacBytes)
+
+	return payloadHex + ":" + hmacHex, nil
+}
+
+// checkTokenNonce verifies the nonce-based authentication (5 min window).
+// Nonce format: "timestamp:random" where timestamp is Unix seconds.
+// Prevents replay attacks by tracking used nonces.
+//
+// SECURITY: This function is atomic - all validation and marking happens
+// under a single lock to prevent TOCTOU race conditions.
 func (s *Service) checkTokenNonce(nonce string) bool {
-	// TODO: Implement actual nonce validation with timestamp check
-	return nonce != ""
+	// Check nonce is not empty (no lock needed for this)
+	if nonce == "" {
+		return false
+	}
+
+	// SECURITY: Acquire lock FIRST for atomic check-validate-mark
+	// This prevents TOCTOU race where two requests with same nonce
+	// could both pass validation before either marks it as used
+	usedNoncesMu.Lock()
+	defer usedNoncesMu.Unlock()
+
+	// Check if already used (inside lock)
+	if _, exists := usedNonces[nonce]; exists {
+		return false // Replay attack!
+	}
+
+	// Parse nonce format: "timestamp:random" (inside lock)
+	parts := strings.SplitN(nonce, ":", 2)
+	if len(parts) != 2 {
+		// Invalid format - still allow for backward compatibility
+		// but require minimum length for security
+		if len(nonce) < 16 {
+			return false
+		}
+		// Legacy nonce - mark and return (inside lock)
+		expiry := time.Now().Add(nonceWindow * 2)
+		usedNonces[nonce] = expiry
+		saveNonceToFile(nonce, expiry)
+		return true
+	}
+
+	// Parse timestamp (inside lock)
+	timestamp, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return false
+	}
+
+	// Check timestamp is within valid window (5 minutes)
+	now := time.Now().Unix()
+	if now-timestamp > int64(nonceWindow.Seconds()) {
+		return false // Nonce too old
+	}
+	if timestamp > now+60 {
+		return false // Nonce from the future (allow 60s clock skew)
+	}
+
+	// Check random part has sufficient entropy
+	if len(parts[1]) < 16 {
+		return false
+	}
+
+	// Mark as used with expiration (inside lock)
+	expiry := time.Now().Add(nonceWindow * 2) // Keep for 2x window
+	usedNonces[nonce] = expiry
+	saveNonceToFile(nonce, expiry)
+
+	return true
+}
+
+// markNonceUsed checks if a nonce has been used and marks it as used if not.
+// Returns true if the nonce was successfully marked (not previously used).
+// SECURITY: Persists nonce to file to prevent replay attacks after restart.
+func (s *Service) markNonceUsed(nonce string) bool {
+	usedNoncesMu.Lock()
+	defer usedNoncesMu.Unlock()
+
+	// Check if already used
+	if _, exists := usedNonces[nonce]; exists {
+		return false // Replay attack!
+	}
+
+	// Mark as used with expiration
+	expiry := time.Now().Add(nonceWindow * 2) // Keep for 2x window
+	usedNonces[nonce] = expiry
+
+	// SECURITY: Persist to file immediately
+	saveNonceToFile(nonce, expiry)
+
+	return true
+}
+
+// loadNoncesFromFile loads persisted nonces from disk on startup.
+// SECURITY: Prevents replay attacks after service restart.
+func loadNoncesFromFile() {
+	file, err := os.Open(nonceFilePath)
+	if err != nil {
+		// File doesn't exist yet - that's OK for first run
+		return
+	}
+	defer file.Close()
+
+	now := time.Now()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		nonce := parts[0]
+		expiryUnix, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			continue
+		}
+
+		expiry := time.Unix(expiryUnix, 0)
+		// Only load non-expired nonces
+		if now.Before(expiry) {
+			usedNonces[nonce] = expiry
+		}
+	}
+}
+
+// saveNonceToFile appends a nonce to the persistence file.
+// Format: nonce|expiry_unix_timestamp
+func saveNonceToFile(nonce string, expiry time.Time) {
+	file, err := os.OpenFile(nonceFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		// Log error but don't fail - nonce is still in memory
+		return
+	}
+	defer file.Close()
+
+	line := fmt.Sprintf("%s|%d\n", nonce, expiry.Unix())
+	file.WriteString(line)
+}
+
+// cleanupNonceFile rewrites the file without expired entries.
+// Called periodically by cleanupExpiredNonces.
+func cleanupNonceFile() {
+	usedNoncesMu.RLock()
+	noncesToKeep := make(map[string]time.Time)
+	for k, v := range usedNonces {
+		noncesToKeep[k] = v
+	}
+	usedNoncesMu.RUnlock()
+
+	// Write to temp file first
+	tmpPath := nonceFilePath + ".tmp"
+	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return
+	}
+
+	for nonce, expiry := range noncesToKeep {
+		line := fmt.Sprintf("%s|%d\n", nonce, expiry.Unix())
+		file.WriteString(line)
+	}
+	file.Close()
+
+	// Atomic rename
+	os.Rename(tmpPath, nonceFilePath)
 }

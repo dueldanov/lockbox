@@ -295,57 +295,193 @@ func TestBuiltin_VerifySig_Invalid(t *testing.T) {
 }
 
 // ============================================
-// BUILTIN: require_sigs(signatures, threshold)
+// BUILTIN: require_sigs(pubkeys, message, signatures, threshold)
 // ============================================
 
-func TestBuiltin_RequireSigs_Threshold_Met(t *testing.T) {
-	signatures := []interface{}{"sig1", "sig2", "sig3"}
+func TestBuiltin_RequireSigs_ValidSignatures(t *testing.T) {
+	// Generate 3 key pairs
+	pub1, priv1, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair failed: %v", err)
+	}
+	pub2, priv2, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair failed: %v", err)
+	}
+	pub3, priv3, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair failed: %v", err)
+	}
+
+	message := "test-asset-id"
+	sig1 := SignMessage(priv1, message)
+	sig2 := SignMessage(priv2, message)
+	sig3 := SignMessage(priv3, message)
+
+	pubkeys := []interface{}{pub1, pub2, pub3}
+	signatures := []interface{}{sig1, sig2, sig3}
 	threshold := int64(2)
 
-	result, err := funcRequireSigs([]interface{}{signatures, threshold})
+	result, err := funcRequireSigs([]interface{}{pubkeys, message, signatures, threshold})
 	if err != nil {
 		t.Fatalf("funcRequireSigs failed: %v", err)
 	}
 
 	passed := result.(bool) == true
-	logNEO(t, "LockScript.Builtin.RequireSigs.ThresholdMet",
-		"require_sigs(signatures []string, threshold int) -> bool",
-		"M-of-N multisig - threshold met",
+	logNEO(t, "LockScript.Builtin.RequireSigs.ValidSignatures",
+		"require_sigs(pubkeys[], message, signatures[], threshold) -> bool",
+		"M-of-N multisig with Ed25519 verification",
 		"docs/requirements/02_SECURITY_MECHANISMS.md#multi-signature",
-		fmt.Sprintf("{signatures: 3 provided, threshold: %d}", threshold),
+		fmt.Sprintf("{pubkeys: 3, signatures: 3, threshold: %d}", threshold),
 		true,
 		result,
-		"3 signatures >= 2 threshold, should return true",
+		"3 valid signatures >= 2 threshold, should return true",
 		passed)
 
 	if !passed {
-		t.Error("require_sigs() with 3 sigs and threshold 2 should return true")
+		t.Error("require_sigs() with 3 valid signatures and threshold 2 should return true")
 	}
 }
 
-func TestBuiltin_RequireSigs_Threshold_NotMet(t *testing.T) {
-	signatures := []interface{}{"sig1"}
+func TestBuiltin_RequireSigs_ThresholdNotMet(t *testing.T) {
+	// Generate 1 key pair
+	pub1, priv1, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair failed: %v", err)
+	}
+
+	message := "test-asset-id"
+	sig1 := SignMessage(priv1, message)
+
+	pubkeys := []interface{}{pub1}
+	signatures := []interface{}{sig1}
 	threshold := int64(2)
 
-	result, err := funcRequireSigs([]interface{}{signatures, threshold})
+	result, err := funcRequireSigs([]interface{}{pubkeys, message, signatures, threshold})
 	if err != nil {
 		t.Fatalf("funcRequireSigs failed: %v", err)
 	}
 
 	passed := result.(bool) == false
 	logNEO(t, "LockScript.Builtin.RequireSigs.ThresholdNotMet",
-		"require_sigs(signatures []string, threshold int) -> bool",
+		"require_sigs(pubkeys[], message, signatures[], threshold) -> bool",
 		"M-of-N multisig - threshold not met",
 		"docs/requirements/02_SECURITY_MECHANISMS.md#multi-signature",
-		fmt.Sprintf("{signatures: 1 provided, threshold: %d}", threshold),
+		fmt.Sprintf("{pubkeys: 1, signatures: 1, threshold: %d}", threshold),
 		false,
 		result,
-		"1 signature < 2 threshold, should return false",
+		"1 valid signature < 2 threshold, should return false",
 		passed)
 
 	if !passed {
-		t.Error("require_sigs() with 1 sig and threshold 2 should return false")
+		t.Error("require_sigs() with 1 valid signature and threshold 2 should return false")
 	}
+}
+
+func TestBuiltin_RequireSigs_RejectsFakeSignatures(t *testing.T) {
+	// Generate key pairs but use fake signatures
+	pub1, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair failed: %v", err)
+	}
+	pub2, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair failed: %v", err)
+	}
+
+	message := "test-asset-id"
+	// Fake 64-byte signatures (hex encoded = 128 chars)
+	fakeSig1 := "deadbeef" + "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+	fakeSig2 := "cafebabe" + "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+
+	pubkeys := []interface{}{pub1, pub2}
+	signatures := []interface{}{fakeSig1, fakeSig2}
+	threshold := int64(1)
+
+	result, err := funcRequireSigs([]interface{}{pubkeys, message, signatures, threshold})
+	if err != nil {
+		t.Fatalf("funcRequireSigs failed: %v", err)
+	}
+
+	passed := result.(bool) == false
+	logNEO(t, "LockScript.Builtin.RequireSigs.RejectsFakeSignatures",
+		"require_sigs(pubkeys[], message, signatures[], threshold) -> bool",
+		"M-of-N multisig - rejects fake signatures",
+		"docs/requirements/02_SECURITY_MECHANISMS.md#multi-signature",
+		"{pubkeys: 2, fake_signatures: 2, threshold: 1}",
+		false,
+		result,
+		"Fake signatures should not verify, returns false",
+		passed)
+
+	if !passed {
+		t.Error("require_sigs() with fake signatures should return false")
+	}
+}
+
+func TestBuiltin_RequireSigs_PartialValid(t *testing.T) {
+	// Generate 3 key pairs, but sign with only 2
+	pub1, priv1, _ := GenerateKeyPair()
+	pub2, priv2, _ := GenerateKeyPair()
+	pub3, _, _ := GenerateKeyPair() // No signature for this one
+
+	message := "test-asset-id"
+	sig1 := SignMessage(priv1, message)
+	sig2 := SignMessage(priv2, message)
+	// Empty signature for third key
+	sig3 := ""
+
+	pubkeys := []interface{}{pub1, pub2, pub3}
+	signatures := []interface{}{sig1, sig2, sig3}
+	threshold := int64(2)
+
+	result, err := funcRequireSigs([]interface{}{pubkeys, message, signatures, threshold})
+	if err != nil {
+		t.Fatalf("funcRequireSigs failed: %v", err)
+	}
+
+	passed := result.(bool) == true
+	logNEO(t, "LockScript.Builtin.RequireSigs.PartialValid",
+		"require_sigs(pubkeys[], message, signatures[], threshold) -> bool",
+		"M-of-N multisig - partial signatures (2 of 3)",
+		"docs/requirements/02_SECURITY_MECHANISMS.md#multi-signature",
+		fmt.Sprintf("{valid_sigs: 2, empty_sig: 1, threshold: %d}", threshold),
+		true,
+		result,
+		"2 valid signatures out of 3 >= threshold 2, should return true",
+		passed)
+
+	if !passed {
+		t.Error("require_sigs() with 2 valid signatures out of 3 and threshold 2 should return true")
+	}
+}
+
+func TestBuiltin_RequireSigs_MismatchedArrayLengths(t *testing.T) {
+	pub1, _, _ := GenerateKeyPair()
+	pub2, _, _ := GenerateKeyPair()
+
+	message := "test-asset-id"
+	sig1 := "some-sig"
+
+	pubkeys := []interface{}{pub1, pub2}  // 2 keys
+	signatures := []interface{}{sig1}      // 1 signature
+	threshold := int64(1)
+
+	_, err := funcRequireSigs([]interface{}{pubkeys, message, signatures, threshold})
+	if err == nil {
+		t.Error("require_sigs() with mismatched array lengths should return error")
+	}
+
+	passed := err != nil
+	logNEO(t, "LockScript.Builtin.RequireSigs.MismatchedArrayLengths",
+		"require_sigs(pubkeys[], message, signatures[], threshold) -> error",
+		"M-of-N multisig - array length validation",
+		"docs/requirements/02_SECURITY_MECHANISMS.md#multi-signature",
+		"{pubkeys: 2, signatures: 1}",
+		"error",
+		err,
+		"Mismatched array lengths should return error",
+		passed)
 }
 
 // ============================================

@@ -31,7 +31,7 @@
     ]
   },
   "db": {
-    "path": "privatedb"
+    "path": "privatedb/hornet-1"
   },
   "p2p": {
     "db": {

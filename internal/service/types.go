@@ -60,6 +60,7 @@ type LockAssetRequest struct {
 	LockScript        string
 	MultiSigAddresses []iotago.Address
 	MinSignatures     int
+	AssetData         []byte // B2B: The actual data (private key) to store
 }
 
 // LockAssetResponse represents the response from locking an asset
@@ -72,9 +73,12 @@ type LockAssetResponse struct {
 
 // UnlockAssetRequest represents a request to unlock an asset
 type UnlockAssetRequest struct {
-	AssetID       string
-	Signatures    [][]byte
-	UnlockParams  map[string]interface{}
+	AssetID      string
+	AccessToken  string                 // SECURITY: Required for authentication
+	Nonce        string                 // SECURITY: Required for replay protection (5 min window)
+	PaymentToken string                 // SECURITY: Single-use payment token from PaymentProcessor
+	Signatures   [][]byte               // Multi-sig signatures (if multi-sig required)
+	UnlockParams map[string]interface{} // Additional params for LockScript
 }
 
 // UnlockAssetResponse represents the response from unlocking an asset
@@ -83,6 +87,7 @@ type UnlockAssetResponse struct {
 	OutputID   iotago.OutputID
 	UnlockTime time.Time
 	Status     AssetStatus
+	AssetData  []byte // B2B: The retrieved data (private key)
 }
 
 // MultiSigConfig represents a multi-signature configuration

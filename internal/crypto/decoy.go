@@ -100,12 +100,20 @@ func (g *DecoyGenerator) GenerateDecoyShards(realShardCount int, shardSize int) 
 	return decoys, nil
 }
 
-// encryptDecoyCharShard encrypts a decoy character shard with purpose-specific key
+// encryptDecoyCharShard encrypts a decoy character shard with a random key.
+//
+// SECURITY: Uses completely random key (NOT derived from master key).
+// This ensures that even with master key access, an attacker cannot
+// distinguish decoy from real shards by trying different KDF contexts.
+// The decoy key is generated fresh and discarded - we never need to
+// decrypt decoys, only real shards.
 func (g *DecoyGenerator) encryptDecoyCharShard(data []byte, shardID uint32, index uint32, total uint32) (*CharacterShard, error) {
-	// Derive key for this decoy shard using purpose-specific derivation
-	decoyKey, err := g.hkdfManager.DeriveKeyForDecoyChar(shardID + index)
-	if err != nil {
-		return nil, err
+	// SECURITY FIX: Generate completely random key for decoy encryption.
+	// NOT derived from master key - prevents KDF context leak attack.
+	// Since decoys are never decrypted, the key is ephemeral and discarded.
+	decoyKey := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, decoyKey); err != nil {
+		return nil, fmt.Errorf("failed to generate random decoy key: %w", err)
 	}
 	defer clearBytes(decoyKey)
 
@@ -192,12 +200,16 @@ func (g *DecoyGenerator) GenerateDecoyMetadata(realMetaCount int, metaSize int) 
 	return decoys, nil
 }
 
-// encryptDecoyMetaShard encrypts a decoy metadata shard
+// encryptDecoyMetaShard encrypts a decoy metadata shard with a random key.
+//
+// SECURITY: Uses completely random key (NOT derived from master key).
+// Same security rationale as encryptDecoyCharShard - prevents KDF context leak.
 func (g *DecoyGenerator) encryptDecoyMetaShard(data []byte, shardID uint32, index uint32, total uint32) (*CharacterShard, error) {
-	// Derive key for this decoy metadata using purpose-specific derivation
-	decoyKey, err := g.hkdfManager.DeriveKeyForDecoyMeta(shardID + index)
-	if err != nil {
-		return nil, err
+	// SECURITY FIX: Generate completely random key for decoy metadata encryption.
+	// NOT derived from master key - prevents KDF context leak attack.
+	decoyKey := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, decoyKey); err != nil {
+		return nil, fmt.Errorf("failed to generate random decoy meta key: %w", err)
 	}
 	defer clearBytes(decoyKey)
 

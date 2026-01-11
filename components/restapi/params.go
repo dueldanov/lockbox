@@ -1,6 +1,8 @@
 package restapi
 
 import (
+	"time"
+
 	"github.com/iotaledger/hive.go/app"
 )
 
@@ -9,7 +11,8 @@ type ParametersRestAPI struct {
 	// Enabled defines whether the REST API plugin is enabled.
 	Enabled bool `default:"true" usage:"whether the REST API plugin is enabled"`
 	// the bind address on which the REST API listens on
-	BindAddress string `default:"0.0.0.0:14265" usage:"the bind address on which the REST API listens on"`
+	// SECURITY: Changed default from 0.0.0.0 to 127.0.0.1 to prevent accidental internet exposure
+	BindAddress string `default:"127.0.0.1:14265" usage:"the bind address on which the REST API listens on"`
 	// the HTTP REST routes which can be called without authorization. Wildcards using * are allowed
 	PublicRoutes []string `usage:"the HTTP REST routes which can be called without authorization. Wildcards using * are allowed"`
 	// the HTTP REST routes which need to be called with authorization. Wildcards using * are allowed
@@ -22,6 +25,9 @@ type ParametersRestAPI struct {
 	JWTAuth struct {
 		// salt used inside the JWT tokens for the REST API. Change this to a different value to invalidate JWT tokens not matching this new value
 		Salt string `default:"HORNET" usage:"salt used inside the JWT tokens for the REST API. Change this to a different value to invalidate JWT tokens not matching this new value"`
+		// SECURITY: Session timeout for JWT tokens. Tokens expire after this duration.
+		// Set to 0 for non-expiring tokens (NOT RECOMMENDED for production!)
+		SessionTimeout time.Duration `default:"1h" usage:"JWT token expiration time. Set to 0 for non-expiring tokens (not recommended)"`
 	} `name:"jwtAuth"`
 
 	PoW struct {
@@ -37,6 +43,16 @@ type ParametersRestAPI struct {
 		// the maximum number of results that may be returned by an endpoint
 		MaxResults int `default:"1000" usage:"the maximum number of results that may be returned by an endpoint"`
 	}
+
+	// SECURITY: Rate limiting to prevent DoS attacks
+	RateLimiting struct {
+		// Enabled defines whether rate limiting is enabled
+		Enabled bool `default:"true" usage:"whether rate limiting is enabled"`
+		// MaxRequestsPerSecond defines the maximum requests per second from a single IP
+		MaxRequestsPerSecond float64 `default:"10" usage:"maximum requests per second from a single IP"`
+		// Burst defines the maximum burst size for rate limiting
+		Burst int `default:"20" usage:"maximum burst size for rate limiting"`
+	} `name:"rateLimiting"`
 }
 
 var ParamsRestAPI = &ParametersRestAPI{
@@ -51,7 +67,8 @@ var ParamsRestAPI = &ParametersRestAPI{
 		"/api/core/v2/outputs*",
 		"/api/core/v2/treasury",
 		"/api/core/v2/receipts*",
-		"/api/debug/v1/*",
+		// SECURITY: Debug routes removed from public - require JWT authentication
+		// "/api/debug/v1/*",
 		"/api/indexer/v1/*",
 		"/api/mqtt/v1",
 		"/api/participation/v1/events*",

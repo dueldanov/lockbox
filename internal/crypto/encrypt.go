@@ -2,7 +2,9 @@ package crypto
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -302,26 +304,20 @@ func generateShardID() uint32 {
 	return id
 }
 
+// calculateChecksum computes a SHA-256 based checksum for data integrity.
+// Returns first 16 bytes of SHA-256 hash for compact storage while maintaining
+// collision resistance (128 bits is sufficient for integrity checks).
 func calculateChecksum(data []byte) []byte {
-	// Simple checksum for now - in production use HMAC
-	sum := make([]byte, 16)
-	for i := 0; i < len(data); i++ {
-		sum[i%16] ^= data[i]
-	}
-	return sum
+	hash := sha256.Sum256(data)
+	return hash[:16] // 128 bits is sufficient for integrity
 }
 
+// verifyChecksum validates data integrity using constant-time comparison.
+// Uses hmac.Equal to prevent timing attacks.
 func verifyChecksum(data, checksum []byte) bool {
 	calculated := calculateChecksum(data)
-	if len(calculated) != len(checksum) {
-		return false
-	}
-	for i := range calculated {
-		if calculated[i] != checksum[i] {
-			return false
-		}
-	}
-	return true
+	// Use constant-time comparison to prevent timing attacks
+	return hmac.Equal(calculated, checksum)
 }
 
 // ShardStorage interface for storing encrypted shards
@@ -330,4 +326,208 @@ type ShardStorage interface {
 	Retrieve(shardID uint32, index uint32) (*CharacterShard, error)
 	RetrieveAll(shardID uint32) ([]*CharacterShard, error)
 	Delete(shardID uint32) error
+}
+
+// === V2 Methods for Shard Indistinguishability ===
+// These methods use DeriveKeyForPosition(bundleID, position) instead of
+// DeriveKeyForShard(shardID + index) for uniform key derivation that
+// doesn't leak shard type information.
+
+// EncryptDataV2 encrypts data using V2 key derivation (DeriveKeyForPosition).
+// This method is used for Shard Indistinguishability where all shards
+// (real and decoy) must use the same key derivation pattern.
+//
+// SECURITY: Real shards use position = originalIndex (0, 1, 2...)
+// Decoy shards should use position = high random values to avoid collisions.
+func (e *ShardEncryptor) EncryptDataV2(data []byte, bundleID string) ([]*CharacterShard, error) {
+	e.mu.RLock()
+	shardSize := e.shardSize
+	e.mu.RUnlock()
+
+	// Calculate number of shards needed
+	dataLen := len(data)
+	numShards := (dataLen + shardSize - 1) / shardSize
+
+	if numShards == 0 {
+		return nil, ErrInvalidShardCount
+	}
+
+	shards := make([]*CharacterShard, numShards)
+
+	// Process each shard
+	for i := 0; i < numShards; i++ {
+		start := i * shardSize
+		end := start + shardSize
+		if end > dataLen {
+			end = dataLen
+		}
+
+		// Get shard data
+		shardData := data[start:end]
+
+		// Encrypt shard using V2 key derivation
+		encryptedShard, err := e.encryptShardV2(shardData, bundleID, uint32(i), uint32(numShards))
+		if err != nil {
+			// Clean up already created shards
+			for j := 0; j < i; j++ {
+				clearBytes(shards[j].Data)
+			}
+			return nil, fmt.Errorf("failed to encrypt shard %d: %w", i, err)
+		}
+
+		shards[i] = encryptedShard
+	}
+
+	return shards, nil
+}
+
+// EncryptSingleShardV2 encrypts a single piece of data with a specific position.
+// This is used when creating shards individually (e.g., real shards with position 0,1,2
+// and decoy shards with high random positions).
+//
+// SECURITY: The position determines the key derivation. Real shards use sequential
+// positions (0, 1, 2...), decoys use random high positions to avoid collision.
+func (e *ShardEncryptor) EncryptSingleShardV2(data []byte, bundleID string, position uint32) (*CharacterShard, error) {
+	return e.encryptShardV2(data, bundleID, position, 1)
+}
+
+// encryptShardV2 encrypts a single shard using V2 key derivation.
+// Uses DeriveKeyForPosition(bundleID, position) for uniform key derivation.
+func (e *ShardEncryptor) encryptShardV2(data []byte, bundleID string, position uint32, total uint32) (*CharacterShard, error) {
+	// V2: Derive key using bundleID and position (no type info!)
+	shardKey, err := e.hkdfManager.DeriveKeyForPosition(bundleID, position)
+	if err != nil {
+		return nil, err
+	}
+	defer clearBytes(shardKey)
+
+	// Create cipher
+	aead, err := chacha20poly1305.NewX(shardKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	// Generate nonce
+	nonce := make([]byte, NonceSize)
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	}
+
+	// V2.1: AAD = SHA256(bundleID)[0:32] || realIndexBE32[0:4]
+	// Full 32-byte hash prevents collision attacks on truncated hashes
+	bundleHash := sha256.Sum256([]byte(bundleID))
+	additionalData := make([]byte, 36)
+	copy(additionalData[0:32], bundleHash[:])
+	binary.BigEndian.PutUint32(additionalData[32:36], position)
+
+	// Encrypt data
+	ciphertext := aead.Seal(nil, nonce, data, additionalData)
+
+	return &CharacterShard{
+		ID:        0, // V2 doesn't use random ID (bundleID serves this purpose)
+		Index:     position,
+		Total:     total,
+		Data:      ciphertext,
+		Nonce:     nonce,
+		Timestamp: time.Now().Unix(),
+		Checksum:  calculateChecksum(ciphertext),
+	}, nil
+}
+
+// DecryptShardV2 decrypts a single shard using V2 key derivation.
+// Used for trial decryption where we try keys for positions 0..realCount-1.
+//
+// Parameters:
+//   - shard: The encrypted shard to decrypt
+//   - bundleID: The bundle identifier
+//   - keyPosition: The position to derive the key from (NOT the shard's storage position)
+//
+// SECURITY: During trial decryption, keyPosition iterates 0..realCount-1
+// and we try each key against all stored shards until AEAD auth succeeds.
+func (e *ShardEncryptor) DecryptShardV2(shard *CharacterShard, bundleID string, keyPosition uint32) ([]byte, error) {
+	// V2: Derive key using bundleID and keyPosition
+	shardKey, err := e.hkdfManager.DeriveKeyForPosition(bundleID, keyPosition)
+	if err != nil {
+		return nil, err
+	}
+	defer clearBytes(shardKey)
+
+	// Create cipher
+	aead, err := chacha20poly1305.NewX(shardKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	// V2.1: AAD = SHA256(bundleID)[0:32] || realIndexBE32[0:4]
+	// Must match encryption exactly
+	bundleHash := sha256.Sum256([]byte(bundleID))
+	additionalData := make([]byte, 36)
+	copy(additionalData[0:32], bundleHash[:])
+	binary.BigEndian.PutUint32(additionalData[32:36], keyPosition)
+
+	// Decrypt data - AEAD will fail if wrong key (trial decryption relies on this)
+	plaintext, err := aead.Open(nil, shard.Nonce, shard.Data, additionalData)
+	if err != nil {
+		return nil, ErrShardDecryptionFailed
+	}
+
+	return plaintext, nil
+}
+
+// DecryptShardV2WithHKDF decrypts a shard using a custom HKDF manager.
+// Used when the bundle's salt differs from the session salt.
+func (e *ShardEncryptor) DecryptShardV2WithHKDF(shard *CharacterShard, bundleID string, keyPosition uint32, hkdf *HKDFManager) ([]byte, error) {
+	// Derive key using the provided HKDF manager
+	shardKey, err := hkdf.DeriveKeyForPosition(bundleID, keyPosition)
+	if err != nil {
+		return nil, err
+	}
+	defer clearBytes(shardKey)
+
+	// Create cipher
+	aead, err := chacha20poly1305.NewX(shardKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	// V2.1: AAD = SHA256(bundleID)[0:32] || realIndexBE32[0:4]
+	bundleHash := sha256.Sum256([]byte(bundleID))
+	additionalData := make([]byte, 36)
+	copy(additionalData[0:32], bundleHash[:])
+	binary.BigEndian.PutUint32(additionalData[32:36], keyPosition)
+
+	// Decrypt data
+	plaintext, err := aead.Open(nil, shard.Nonce, shard.Data, additionalData)
+	if err != nil {
+		return nil, ErrShardDecryptionFailed
+	}
+
+	return plaintext, nil
+}
+
+// GetSalt returns a copy of the HKDF salt for persistence.
+// Must be saved with the bundle to enable future decryption.
+func (e *ShardEncryptor) GetSalt() []byte {
+	return e.hkdfManager.GetSalt()
+}
+
+// GetHKDFManager returns the internal HKDF manager.
+// Used for trial decryption recovery where direct access to key derivation is needed.
+func (e *ShardEncryptor) GetHKDFManager() *HKDFManager {
+	return e.hkdfManager
+}
+
+// CloneWithSalt creates a new ShardEncryptor with the same master key but different salt.
+// Used to restore encryption for a bundle with its persisted salt.
+func (e *ShardEncryptor) CloneWithSalt(salt []byte) (*ShardEncryptor, error) {
+	hkdfClone, err := e.hkdfManager.CloneWithSalt(salt)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ShardEncryptor{
+		hkdfManager:  hkdfClone,
+		shardSize:    e.shardSize,
+		secureMemory: NewSecureMemoryPool(10),
+	}, nil
 }

@@ -1,7 +1,9 @@
 package jwt
 
 import (
+	crand "crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"time"
@@ -16,6 +18,16 @@ import (
 var (
 	ErrJWTInvalidClaims = echo.NewHTTPError(http.StatusUnauthorized, "invalid jwt claims")
 )
+
+// SECURITY: Generate cryptographically secure JWT ID to prevent prediction
+func generateSecureJTI() string {
+	b := make([]byte, 16)
+	if _, err := crand.Read(b); err != nil {
+		// Fallback to timestamp if crypto/rand fails (should never happen)
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
+}
 
 type Auth struct {
 	subject        string
@@ -124,11 +136,12 @@ func (j *Auth) IssueJWT() (string, error) {
 	now := time.Now()
 
 	// Set claims
+	// SECURITY: Use cryptographically secure JWT ID instead of predictable timestamp
 	stdClaims := jwt.StandardClaims{
 		Subject:   j.subject,
 		Issuer:    j.nodeID,
 		Audience:  j.nodeID,
-		Id:        fmt.Sprintf("%d", now.Unix()),
+		Id:        generateSecureJTI(),
 		IssuedAt:  now.Unix(),
 		NotBefore: now.Unix(),
 	}

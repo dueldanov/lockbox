@@ -1,0 +1,368 @@
+syntax = "proto3";
+
+package lockbox.b2b.api;
+
+option go_package = "github.com/dueldanov/lockbox/v2/internal/b2b/api";
+
+service LockBoxAPI {
+    // LockScript operations
+    rpc CompileScript(CompileScriptRequest) returns (CompileScriptResponse);
+    rpc ExecuteScript(ExecuteScriptRequest) returns (ExecuteScriptResponse);
+    rpc ValidateScript(ValidateScriptRequest) returns (ValidateScriptResponse);
+
+    // Vault operations
+    rpc CreateVault(CreateVaultRequest) returns (CreateVaultResponse);
+    rpc GenerateKey(GenerateKeyRequest) returns (GenerateKeyResponse);
+    rpc RotateKeys(RotateKeysRequest) returns (RotateKeysResponse);
+    rpc GetVaultInfo(GetVaultInfoRequest) returns (VaultInfo);
+
+    // Account operations
+    rpc GetAccountInfo(GetAccountInfoRequest) returns (AccountInfo);
+    rpc UpgradeTier(UpgradeTierRequest) returns (UpgradeTierResponse);
+    rpc GetUsageStats(GetUsageStatsRequest) returns (UsageStats);
+
+    // Transaction operations
+    rpc SubmitTransaction(SubmitTransactionRequest) returns (SubmitTransactionResponse);
+    rpc GetTransactionStatus(GetTransactionStatusRequest) returns (TransactionStatus);
+
+    // Streaming operations
+    rpc StreamTransactions(StreamTransactionsRequest) returns (stream Transaction);
+    rpc StreamEvents(StreamEventsRequest) returns (stream Event);
+
+    // B2B Key Storage API - Core endpoints for partner integrations
+    rpc StoreKey(StoreKeyRequest) returns (StoreKeyResponse);
+    rpc RetrieveKey(RetrieveKeyRequest) returns (RetrieveKeyResponse);
+    rpc GetRevenueShare(GetRevenueShareRequest) returns (GetRevenueShareResponse);
+    rpc GetPartnerStats(GetPartnerStatsRequest) returns (GetPartnerStatsResponse);
+}
+
+// LockScript messages
+message CompileScriptRequest {
+    string source = 1;
+    map<string, string> parameters = 2;
+}
+
+message CompileScriptResponse {
+    string script_id = 1;
+    bytes bytecode = 2;
+    repeated string warnings = 3;
+}
+
+message ExecuteScriptRequest {
+    string script_id = 1;
+    map<string, string> environment = 2;
+    uint64 gas_limit = 3;
+}
+
+message ExecuteScriptResponse {
+    bool success = 1;
+    string output = 2;
+    uint64 gas_used = 3;
+    repeated string logs = 4;
+}
+
+message ValidateScriptRequest {
+    string source = 1;
+}
+
+message ValidateScriptResponse {
+    bool valid = 1;
+    repeated string errors = 2;
+}
+
+// Vault messages
+message CreateVaultRequest {
+    string name = 1;
+    map<string, string> metadata = 2;
+}
+
+message CreateVaultResponse {
+    string vault_id = 1;
+}
+
+message GenerateKeyRequest {
+    string vault_id = 1;
+    string key_type = 2;
+    string key_name = 3;
+}
+
+message GenerateKeyResponse {
+    string key_id = 1;
+    string public_key = 2;
+}
+
+message RotateKeysRequest {
+    string vault_id = 1;
+    repeated string key_ids = 2;
+}
+
+message RotateKeysResponse {
+    bool success = 1;
+    map<string, string> new_key_ids = 2;
+}
+
+message GetVaultInfoRequest {
+    string vault_id = 1;
+}
+
+message VaultInfo {
+    string vault_id = 1;
+    string owner = 2;
+    int64 created_at = 3;
+    int64 last_rotation = 4;
+    repeated KeyInfo keys = 5;
+    map<string, string> metadata = 6;
+}
+
+message KeyInfo {
+    string key_id = 1;
+    string key_type = 2;
+    string key_name = 3;
+    int64 created_at = 4;
+    int64 expires_at = 5;
+}
+
+// Account messages
+message GetAccountInfoRequest {
+    string account_id = 1;
+}
+
+message AccountInfo {
+    string account_id = 1;
+    string tier = 2;
+    int64 created_at = 3;
+    int64 last_activity = 4;
+    UsageStats usage = 5;
+    map<string, string> metadata = 6;
+}
+
+message UpgradeTierRequest {
+    string account_id = 1;
+    string new_tier = 2;
+}
+
+message UpgradeTierResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message GetUsageStatsRequest {
+    string account_id = 1;
+}
+
+message UsageStats {
+    int32 transactions_hour = 1;
+    int64 storage_used = 2;
+    int32 contracts_deployed = 3;
+    int64 last_reset = 4;
+}
+
+// Transaction messages
+message SubmitTransactionRequest {
+    bytes transaction_data = 1;
+    string priority = 2;
+}
+
+message SubmitTransactionResponse {
+    string transaction_id = 1;
+    string status = 2;
+}
+
+message GetTransactionStatusRequest {
+    string transaction_id = 1;
+}
+
+message TransactionStatus {
+    string transaction_id = 1;
+    string status = 2;
+    int64 timestamp = 3;
+    string block_id = 4;
+    map<string, string> metadata = 5;
+}
+
+// Streaming messages
+message StreamTransactionsRequest {
+    string filter = 1;
+    int64 start_time = 2;
+}
+
+message Transaction {
+    string transaction_id = 1;
+    bytes data = 2;
+    int64 timestamp = 3;
+    string sender = 4;
+    string receiver = 5;
+    map<string, string> metadata = 6;
+}
+
+message StreamEventsRequest {
+    repeated string event_types = 1;
+    string filter = 2;
+}
+
+message Event {
+    string event_id = 1;
+    string event_type = 2;
+    int64 timestamp = 3;
+    map<string, string> data = 4;
+}
+
+// ============================================================================
+// B2B Key Storage API Messages
+// ============================================================================
+
+// StoreKey - Store a private key securely with LockBox
+message StoreKeyRequest {
+    // Partner credentials
+    string partner_id = 1;
+    string api_key = 2;
+
+    // Key data
+    bytes private_key = 3;          // The private key to store (encrypted in transit)
+    string key_type = 4;            // "ed25519", "secp256k1", "bls12-381"
+    string owner_address = 5;       // Owner's IOTA address for retrieval
+
+    // Lock configuration
+    int64 lock_duration_seconds = 6; // How long to lock the key
+    string lock_script = 7;          // Optional LockScript conditions
+
+    // Multi-sig (optional)
+    repeated string multi_sig_addresses = 8;
+    int32 min_signatures = 9;
+
+    // Metadata
+    map<string, string> metadata = 10;
+}
+
+message StoreKeyResponse {
+    string bundle_id = 1;           // Unique ID for this stored key bundle
+    string access_token = 2;        // Token for retrieval (give to user)
+    int64 lock_time = 3;            // When the key was locked
+    int64 unlock_time = 4;          // When the key can be retrieved
+    string status = 5;              // "locked"
+
+    // Fee information
+    FeeInfo fee_info = 6;
+}
+
+// RetrieveKey - Retrieve a previously stored private key
+message RetrieveKeyRequest {
+    // Partner credentials
+    string partner_id = 1;
+    string api_key = 2;
+
+    // Retrieval info
+    string bundle_id = 3;           // The bundle ID from StoreKey
+    string access_token = 4;        // Access token for authentication
+
+    // Payment
+    string payment_token = 5;       // Payment token (from CreatePayment)
+
+    // Security
+    string nonce = 6;               // Replay protection (timestamp_random)
+    repeated bytes signatures = 7;  // Multi-sig signatures if required
+
+    // LockScript parameters (if script requires)
+    map<string, string> unlock_params = 8;
+}
+
+message RetrieveKeyResponse {
+    string bundle_id = 1;
+    bytes private_key = 2;          // The retrieved private key
+    string key_type = 3;
+    int64 retrieval_time = 4;
+    string status = 5;              // "unlocked"
+
+    // Revenue info for partner
+    RevenueInfo revenue_info = 6;
+}
+
+// GetRevenueShare - Get partner's revenue share information
+message GetRevenueShareRequest {
+    string partner_id = 1;
+    string api_key = 2;
+
+    // Optional date range filter
+    int64 start_date = 3;           // Unix timestamp
+    int64 end_date = 4;             // Unix timestamp
+}
+
+message GetRevenueShareResponse {
+    string partner_id = 1;
+
+    // Current balance
+    uint64 pending_amount = 2;      // Amount pending payout (in micro-units)
+    uint64 total_earned = 3;        // Total earned all time
+    uint64 total_paid = 4;          // Total paid out
+
+    // Revenue share configuration
+    double share_percentage = 5;    // Partner's share (e.g., 70.0 = 70%)
+
+    // Recent transactions
+    repeated RevenueTransaction transactions = 6;
+
+    // Next payout
+    int64 next_payout_date = 7;
+    uint64 minimum_payout_threshold = 8;
+}
+
+// GetPartnerStats - Get partner usage statistics
+message GetPartnerStatsRequest {
+    string partner_id = 1;
+    string api_key = 2;
+
+    // Optional date range
+    int64 start_date = 3;
+    int64 end_date = 4;
+}
+
+message GetPartnerStatsResponse {
+    string partner_id = 1;
+
+    // Usage statistics
+    uint64 total_keys_stored = 2;
+    uint64 total_keys_retrieved = 3;
+    uint64 active_bundles = 4;      // Currently locked keys
+
+    // Revenue statistics
+    uint64 total_storage_fees = 5;
+    uint64 total_retrieval_fees = 6;
+    uint64 average_lock_duration = 7; // In seconds
+
+    // Activity
+    int64 last_activity_time = 8;
+    repeated DailyStats daily_stats = 9;
+}
+
+// Supporting message types
+message FeeInfo {
+    uint64 setup_fee = 1;           // One-time setup fee
+    uint64 storage_fee = 2;         // Storage fee charged
+    uint64 estimated_retrieval_fee = 3; // Estimated retrieval fee
+    string currency = 4;            // "USD", "IOTA", "LOCK"
+    double discount_applied = 5;    // Discount percentage if LOCK token used
+}
+
+message RevenueInfo {
+    uint64 retrieval_fee_charged = 1;
+    uint64 partner_share = 2;       // Partner's portion
+    uint64 lockbox_share = 3;       // LockBox's portion
+    string transaction_id = 4;      // Payment transaction ID
+}
+
+message RevenueTransaction {
+    string transaction_id = 1;
+    string bundle_id = 2;
+    string type = 3;                // "storage", "retrieval", "rotation"
+    uint64 total_fee = 4;
+    uint64 partner_share = 5;
+    int64 timestamp = 6;
+    string status = 7;              // "pending", "paid"
+}
+
+message DailyStats {
+    int64 date = 1;                 // Unix timestamp (start of day)
+    uint32 keys_stored = 2;
+    uint32 keys_retrieved = 3;
+    uint64 revenue_generated = 4;
+}
