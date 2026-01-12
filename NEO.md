@@ -119,6 +119,27 @@ These areas can be extended or modified:
 
 ---
 
+## B2B Partner API
+
+**Location:** `internal/b2b/grpc_server.go`, `internal/b2b/api/b2b_api.proto`
+
+**Core Methods:**
+- `StoreKey` (line 109) - Partner key storage with revenue tracking
+- `RetrieveKey` (line 226) - Partner key retrieval with payment processing
+
+**20 RPC endpoints total**, including:
+- CompileScript, GetRevenueShare, CreateVault, ListVaults
+- GetPaymentStatus, GetNodeStatistics, GetTierCapabilities
+- ValidateAddress, CheckHealth, etc.
+
+**Future planned (not implemented):**
+- FetchVpnConfig - VPN configuration management
+- RegisterUsername - Username registry
+
+**Pattern:** B2B API wraps internal Service API with partner authentication, fee calculation, and revenue tracking.
+
+---
+
 ## Before Making Changes
 
 1. Check if file is listed in "Protected Code" section above
