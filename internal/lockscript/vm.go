@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -25,11 +26,19 @@ func NewVirtualMachine() *VirtualMachine {
 	}
 }
 
-func (vm *VirtualMachine) Execute(ctx context.Context, bytecode []byte, env *Environment) (*ExecutionResult, error) {
+func (vm *VirtualMachine) Execute(ctx context.Context, bytecode []byte, env *Environment) (result *ExecutionResult, err error) {
+	// SECURITY: Catch panics from stack underflow and convert to errors
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("VM execution panic: %v", r)
+			result = nil
+		}
+	}()
+
 	vm.ctx = ctx
 	vm.stack = vm.stack[:0]
 	vm.gasUsed = 0
-	
+
 	// Initialize VM environment
 	for k, v := range env.Variables {
 		vm.memory[k] = v
@@ -100,18 +109,33 @@ func (vm *VirtualMachine) Execute(ctx context.Context, bytecode []byte, env *Env
 		case OpAdd:
 			b := vm.popInt()
 			a := vm.popInt()
+			// SECURITY: Check for integer overflow
+			if (b > 0 && a > math.MaxInt64-b) || (b < 0 && a < math.MinInt64-b) {
+				return nil, errors.New("SECURITY ERROR: integer overflow in addition")
+			}
 			vm.push(a + b)
 			vm.gasUsed += 3
-			
+
 		case OpSub:
 			b := vm.popInt()
 			a := vm.popInt()
+			// SECURITY: Check for integer overflow in subtraction
+			if (b < 0 && a > math.MaxInt64+b) || (b > 0 && a < math.MinInt64+b) {
+				return nil, errors.New("SECURITY ERROR: integer overflow in subtraction")
+			}
 			vm.push(a - b)
 			vm.gasUsed += 3
-			
+
 		case OpMul:
 			b := vm.popInt()
 			a := vm.popInt()
+			// SECURITY: Check for integer overflow in multiplication
+			if a != 0 && b != 0 {
+				result := a * b
+				if result/a != b {
+					return nil, errors.New("SECURITY ERROR: integer overflow in multiplication")
+				}
+			}
 			vm.push(a * b)
 			vm.gasUsed += 5
 			
@@ -209,21 +233,21 @@ func (vm *VirtualMachine) Execute(ctx context.Context, bytecode []byte, env *Env
 			return nil, fmt.Errorf("unknown opcode: %v", opcode)
 		}
 	}
-	
+
 	// Get result from stack
-	var result interface{}
+	var stackResult interface{}
 	success := true
-	
+
 	if len(vm.stack) > 0 {
-		result = vm.stack[len(vm.stack)-1]
-		if b, ok := result.(bool); ok {
+		stackResult = vm.stack[len(vm.stack)-1]
+		if b, ok := stackResult.(bool); ok {
 			success = b
 		}
 	}
-	
+
 	return &ExecutionResult{
 		Success: success,
-		Value:   result,
+		Value:   stackResult,
 		GasUsed: vm.gasUsed,
 		Logs:    []string{}, // TODO: Implement logging
 	}, nil
@@ -244,6 +268,11 @@ func (vm *VirtualMachine) pop() interface{} {
 
 func (vm *VirtualMachine) popInt() int64 {
 	val := vm.pop()
+	if val == nil {
+		// SECURITY: Stack underflow should fail execution, not silently return 0
+		// Returning 0 allows bypass of time-lock checks (unlock_time = 0 allows immediate unlock)
+		panic("SECURITY ERROR: stack underflow in popInt - execution aborted")
+	}
 	switch v := val.(type) {
 	case int64:
 		return v
@@ -255,7 +284,8 @@ func (vm *VirtualMachine) popInt() int64 {
 		}
 		return 0
 	default:
-		return 0
+		// SECURITY: Unknown type should fail, not default to 0
+		panic(fmt.Sprintf("SECURITY ERROR: invalid type %T for integer operation", val))
 	}
 }
 
