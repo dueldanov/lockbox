@@ -14,7 +14,19 @@ type ParametersLockBox struct {
 		TLSKeyPath  string `default:"" usage:"path to TLS key file"`
 	}
 
-	Tier string `default:"Standard" usage:"default service tier (Basic, Standard, Premium, Elite)"`
+	B2B struct {
+		Enabled bool `default:"true" usage:"enable B2B gRPC API"`
+
+		GRPC struct {
+			BindAddress string `default:"0.0.0.0:50052" usage:"B2B gRPC API bind address"`
+			TLSEnabled  bool   `default:"false" usage:"enable TLS for B2B gRPC API (required in production)"`
+			TLSCertPath string `default:"" usage:"path to TLS certificate file"`
+			TLSKeyPath  string `default:"" usage:"path to TLS key file"`
+		}
+	}
+
+	Tier                 string `default:"Standard" usage:"default service tier (Basic, Standard, Premium, Elite)"`
+	TrialDecryptionDebug bool   `default:"false" usage:"enable trial decryption debug logging"`
 }
 
 var ParamsLockBox = &ParametersLockBox{}

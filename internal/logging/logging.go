@@ -202,7 +202,7 @@ func (l *OperationLogger) SetOutput(w io.Writer) {
 //
 // Example:
 //
-//	defer logger.LogFunc(PhaseEncryption, "AES256GCMEncrypt", start)()
+//	defer logger.LogFunc(PhaseEncryption, "XChaCha20Poly1305Encrypt", start)()
 func (l *OperationLogger) LogFunc(phase string, function string, start time.Time) func() {
 	return func() {
 		l.Log(phase, function, StatusSuccess, time.Since(start), "")

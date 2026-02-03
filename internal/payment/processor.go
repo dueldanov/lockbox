@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -150,11 +151,90 @@ func (m *MockLedgerVerifier) VerifyPayment(ctx context.Context, paymentToken str
 	return txID, nil
 }
 
+// ValidatedMockLedgerVerifier validates payments with amount and currency checks.
+// This is an enhanced mock verifier for working prototypes that validates:
+// - Payment amounts match expected
+// - Currency matches expected
+// - Asset ID matches
+// - Payment is confirmed
+type ValidatedMockLedgerVerifier struct {
+	payments     map[string]LedgerPayment // txID -> payment
+	tokenToTxID  map[string]string        // paymentToken -> txID
+	mu           sync.RWMutex
+}
+
+// LedgerPayment represents a payment record in the ledger.
+type LedgerPayment struct {
+	TxID        string
+	AssetID     string
+	AmountUSD   float64
+	Currency    Currency
+	Timestamp   time.Time
+	Confirmed   bool
+}
+
+// NewValidatedMockLedgerVerifier creates a new validated mock ledger verifier.
+func NewValidatedMockLedgerVerifier() *ValidatedMockLedgerVerifier {
+	return &ValidatedMockLedgerVerifier{
+		payments:    make(map[string]LedgerPayment),
+		tokenToTxID: make(map[string]string),
+	}
+}
+
+// AddPayment adds a payment to the mock ledger for testing.
+// The paymentToken parameter links a payment token to this ledger payment.
+func (v *ValidatedMockLedgerVerifier) AddPayment(paymentToken string, payment LedgerPayment) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.payments[payment.TxID] = payment
+	v.tokenToTxID[paymentToken] = payment.TxID
+}
+
+// VerifyPayment implements LedgerVerifier with full validation.
+func (v *ValidatedMockLedgerVerifier) VerifyPayment(ctx context.Context, paymentToken string, expectedAmount float64, currency Currency) (string, error) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	// Look up txID by payment token
+	txID, ok := v.tokenToTxID[paymentToken]
+	if !ok {
+		return "", ErrPaymentNotFound
+	}
+
+	// Get payment record
+	payment, ok := v.payments[txID]
+	if !ok {
+		return "", ErrPaymentNotFound
+	}
+
+	// Validate amount (with 0.01 tolerance for floating point)
+	if math.Abs(payment.AmountUSD-expectedAmount) > 0.01 {
+		return "", fmt.Errorf("payment amount mismatch: expected %.2f, got %.2f", expectedAmount, payment.AmountUSD)
+	}
+
+	// Validate currency
+	if payment.Currency != currency {
+		return "", fmt.Errorf("payment currency mismatch: expected %s, got %s", currency, payment.Currency)
+	}
+
+	// Validate confirmed status
+	if !payment.Confirmed {
+		return "", fmt.Errorf("payment %s not confirmed on ledger", txID)
+	}
+
+	return txID, nil
+}
+
 // NewPaymentProcessor creates a new payment processor.
 //
-// If ledgerVerifier is nil, the processor operates in mock mode
-// where all payments are automatically confirmed.
+// If ledgerVerifier is nil, the processor uses ValidatedMockLedgerVerifier
+// which validates amounts, currencies, and confirmed status for testing.
 func NewPaymentProcessor(ledgerVerifier LedgerVerifier) *PaymentProcessor {
+	// If no ledger verifier provided, use validated mock for testing
+	if ledgerVerifier == nil {
+		ledgerVerifier = NewValidatedMockLedgerVerifier()
+	}
+
 	return &PaymentProcessor{
 		feeCalculator:    NewFeeCalculator(),
 		payments:         make(map[string]*Payment),
@@ -341,6 +421,72 @@ func (p *PaymentProcessor) VerifyPayment(ctx context.Context, req VerifyPaymentR
 		}, nil
 	}
 
+	return &VerifyPaymentResponse{
+		Valid:     true,
+		PaymentID: paymentID,
+		AmountUSD: payment.AmountUSD,
+	}, nil
+}
+
+// VerifyAndMarkPaymentUsed atomically verifies and marks payment as used.
+//
+// This prevents double-spend race conditions by holding exclusive lock
+// from verification through marking as used.
+//
+// SECURITY: This MUST be atomic to prevent payment replay attacks.
+// The vulnerable two-step process (VerifyPayment + MarkPaymentUsed) allowed
+// 50 concurrent requests to all verify the same payment before any marked it as used.
+func (p *PaymentProcessor) VerifyAndMarkPaymentUsed(ctx context.Context, req VerifyPaymentRequest) (*VerifyPaymentResponse, error) {
+	// CRITICAL: Use exclusive Lock (not RLock) for entire operation
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Step 1: Get payment ID
+	paymentID, ok := p.tokenToPaymentID[req.PaymentToken]
+	if !ok {
+		return &VerifyPaymentResponse{
+			Valid: false,
+			Error: "payment token not found",
+		}, nil
+	}
+
+	// Step 2: Get payment record
+	payment, ok := p.payments[paymentID]
+	if !ok {
+		return &VerifyPaymentResponse{
+			Valid: false,
+			Error: "payment record not found",
+		}, nil
+	}
+
+	// Step 3: Verify payment matches asset
+	if payment.AssetID != req.AssetID {
+		return &VerifyPaymentResponse{
+			Valid:     false,
+			PaymentID: paymentID,
+			Error:     "payment token not valid for this asset",
+		}, nil
+	}
+
+	// Step 4: Check payment validity (expiry, already used, etc.)
+	// CRITICAL: This checks if payment.Status == PaymentStatusUsed
+	// We're holding the lock, so no race condition possible
+	if err := payment.IsValid(); err != nil {
+		return &VerifyPaymentResponse{
+			Valid:     false,
+			PaymentID: paymentID,
+			Error:     err.Error(),
+		}, nil
+	}
+
+	// Step 5: ATOMICALLY mark as used BEFORE returning success
+	// CRITICAL: This prevents race condition - payment is marked
+	// as used while still holding the lock. Only ONE caller can succeed.
+	now := time.Now()
+	payment.Status = PaymentStatusUsed
+	payment.UsedAt = &now
+
+	// Step 6: Return success
 	return &VerifyPaymentResponse{
 		Valid:     true,
 		PaymentID: paymentID,

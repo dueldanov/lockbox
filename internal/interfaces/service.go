@@ -111,6 +111,16 @@ type LockedAsset struct {
 	// Will be removed in next major version. New code should NOT use this.
 	// Deprecated: Use trial decryption with TotalShards/RealCount/Salt
 	ShardIndexMap     map[uint32]uint32   `json:"shard_index_map,omitempty"`
+
+	// === Metadata Decoy Fields (Premium/Elite tiers only) ===
+	// MetadataShardCount is the total number of metadata shards (real + decoy)
+	// Premium tier: ratio 1.0 → 2 total (1 real + 1 decoy)
+	// Elite tier: ratio 2.0 → 3 total (1 real + 2 decoy)
+	MetadataShardCount int               `json:"metadata_shard_count,omitempty"`
+
+	// MetadataIndexMap maps shard index → is_real (true=real, false=decoy)
+	// Used to identify which metadata shard contains real metadata
+	MetadataIndexMap   map[int]bool      `json:"metadata_index_map,omitempty"`
 }
 
 // lockedAssetJSON is an internal type for JSON serialization
@@ -135,9 +145,11 @@ type lockedAssetJSON struct {
 	TotalShards       int               `json:"total_shards,omitempty"`
 	RealCount         int               `json:"real_count,omitempty"`
 	Salt              []byte            `json:"salt,omitempty"`
-	DataLength        int               `json:"data_length,omitempty"`
-	ShardCount        int               `json:"shard_count,omitempty"`
-	ShardIndexMap     map[uint32]uint32 `json:"shard_index_map,omitempty"`
+	DataLength           int               `json:"data_length,omitempty"`
+	ShardCount           int               `json:"shard_count,omitempty"`
+	ShardIndexMap        map[uint32]uint32 `json:"shard_index_map,omitempty"`
+	MetadataShardCount   int               `json:"metadata_shard_count,omitempty"`
+	MetadataIndexMap     map[int]bool      `json:"metadata_index_map,omitempty"`
 }
 
 // MarshalJSON implements json.Marshaler for LockedAsset
@@ -157,9 +169,11 @@ func (a LockedAsset) MarshalJSON() ([]byte, error) {
 		TotalShards:   a.TotalShards,
 		RealCount:     a.RealCount,
 		Salt:          a.Salt,
-		DataLength:    a.DataLength,
-		ShardCount:    a.ShardCount,
-		ShardIndexMap: a.ShardIndexMap,
+		DataLength:         a.DataLength,
+		ShardCount:         a.ShardCount,
+		ShardIndexMap:      a.ShardIndexMap,
+		MetadataShardCount: a.MetadataShardCount,
+		MetadataIndexMap:   a.MetadataIndexMap,
 	}
 
 	// Convert owner address to bech32
@@ -209,6 +223,8 @@ func (a *LockedAsset) UnmarshalJSON(data []byte) error {
 	a.DataLength = j.DataLength
 	a.ShardCount = j.ShardCount
 	a.ShardIndexMap = j.ShardIndexMap
+	a.MetadataShardCount = j.MetadataShardCount
+	a.MetadataIndexMap = j.MetadataIndexMap
 
 	// Parse owner address from bech32
 	if j.OwnerAddressBech != "" {

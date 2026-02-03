@@ -280,7 +280,7 @@ func TestSaltInSerializedAsset(t *testing.T) {
 // TestV2ShardSerializationInRealFlow tests that shards are serialized in V2 format
 // during the real LockAsset flow.
 func TestV2ShardSerializationInRealFlow(t *testing.T) {
-	t.Skip("PENDING: Real LockAsset does not use V2 shard format yet - unskip after implementing")
+	// V2 format is now enabled in production!
 
 	svc := setupTestService(t)
 	ctx := context.Background()

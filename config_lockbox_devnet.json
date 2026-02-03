@@ -137,7 +137,13 @@
       "bindAddress": "0.0.0.0:50051",
       "tlsEnabled": false
     },
+    "b2b": {
+      "enabled": true,
+      "grpc": {
+        "bindAddress": "0.0.0.0:50052",
+        "tlsEnabled": false
+      }
+    },
     "tier": "Standard"
   }
 }
-

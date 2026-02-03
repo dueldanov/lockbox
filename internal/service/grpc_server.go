@@ -11,17 +11,20 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 
 	pb "github.com/dueldanov/lockbox/v2/internal/proto"
+	"github.com/dueldanov/lockbox/v2/internal/verification"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 
 type GRPCServer struct {
 	pb.UnimplementedLockBoxServiceServer
-	
+
 	service      *Service
+	rateLimiter  *verification.RateLimiter
 	grpcServer   *grpc.Server
 	bindAddress  string
 	tlsEnabled   bool
@@ -31,12 +34,19 @@ type GRPCServer struct {
 
 func NewGRPCServer(
 	service *Service,
+	rateLimiter *verification.RateLimiter,
 	bindAddress string,
 	tlsEnabled bool,
 	tlsCertPath, tlsKeyPath string,
 ) (*GRPCServer, error) {
+	// If no rate limiter provided, create default (5 req/min)
+	if rateLimiter == nil {
+		rateLimiter = verification.NewRateLimiter(verification.DefaultRateLimiterConfig())
+	}
+
 	s := &GRPCServer{
 		service:     service,
+		rateLimiter: rateLimiter,
 		bindAddress: bindAddress,
 		tlsEnabled:  tlsEnabled,
 		tlsCertPath: tlsCertPath,
@@ -89,7 +99,7 @@ func (s *GRPCServer) authInterceptor(
 	info *grpc.UnaryServerInfo,
 	handler grpc.UnaryHandler,
 ) (interface{}, error) {
-	// Public methods that don't require auth
+	// Public methods that don't require auth or rate limiting
 	publicMethods := map[string]bool{
 		"/lockbox.LockBoxService/GetServiceInfo": true,
 	}
@@ -98,11 +108,45 @@ func (s *GRPCServer) authInterceptor(
 		return handler(ctx, req)
 	}
 
+	// Extract user ID from metadata for rate limiting
+	userID := extractUserID(ctx)
+
+	// RATE LIMITING: Check rate limit before processing request
+	if s.rateLimiter != nil {
+		if err := s.rateLimiter.Allow(userID); err != nil {
+			retryAfter := s.rateLimiter.GetRetryAfter(userID)
+			return nil, status.Errorf(codes.ResourceExhausted,
+				"rate limit exceeded: retry after %v", retryAfter)
+		}
+	}
+
 	// TODO: Add JWT validation from metadata for sensitive methods
 	// For now, rely on mTLS for authentication
 	// Per-method auth can be added by checking info.FullMethod
 
 	return handler(ctx, req)
+}
+
+// extractUserID extracts user ID from request context for rate limiting.
+// In production, this would extract from JWT or client certificate.
+// For now, use authorization token or default to "anonymous".
+func extractUserID(ctx context.Context) string {
+	// Try to get authorization from metadata
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return "anonymous"
+	}
+
+	// Get authorization header
+	authHeaders := md.Get("authorization")
+	if len(authHeaders) > 0 {
+		// In production, parse JWT and extract userID
+		// For now, use the token itself as userID
+		return authHeaders[0]
+	}
+
+	// Fallback to "anonymous" for requests without auth
+	return "anonymous"
 }
 
 func (s *GRPCServer) Start() error {

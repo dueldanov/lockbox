@@ -54,9 +54,9 @@ func (l *StoreKeyLogger) LogEncrypt(duration time.Duration, dataType string, suc
 	status := StatusSuccess
 	if !success {
 		status = StatusFailure
-		l.SecurityAlert(PhaseEncryption, "AES256GCMEncrypt()", "Encryption failed for "+dataType)
+		l.SecurityAlert(PhaseEncryption, "XChaCha20Poly1305Encrypt()", "Encryption failed for "+dataType)
 	}
-	l.Log(PhaseEncryption, "AES256GCMEncrypt()", status, duration,
+	l.Log(PhaseEncryption, "XChaCha20Poly1305Encrypt()", status, duration,
 		formatDetails("data_type", dataType))
 }
 
@@ -291,7 +291,7 @@ func (l *RetrieveKeyLogger) LogDecryptMetadata(duration time.Duration, success b
 	if !success {
 		status = StatusFailure
 	}
-	l.Log(PhaseBundleRetrieval, "AES256GCMDecrypt()", status, duration, "")
+	l.Log(PhaseBundleRetrieval, "XChaCha20Poly1305Decrypt()", status, duration, "")
 }
 
 // Phase 8: Shard Fetching

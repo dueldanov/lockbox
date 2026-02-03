@@ -25,7 +25,7 @@ func TestOperationLogger_Log(t *testing.T) {
 	logger := NewOperationLogger(OpStoreKey, "bundle-123", "req-456")
 	logger.SetOutput(&buf)
 
-	logger.Log(PhaseEncryption, "AES256GCMEncrypt()", StatusSuccess, 100*time.Millisecond, "test details")
+	logger.Log(PhaseEncryption, "XChaCha20Poly1305Encrypt()", StatusSuccess, 100*time.Millisecond, "test details")
 
 	// Check entry was recorded
 	entries := logger.GetEntries()
@@ -34,7 +34,7 @@ func TestOperationLogger_Log(t *testing.T) {
 	entry := entries[0]
 	assert.Equal(t, OpStoreKey, entry.Operation)
 	assert.Equal(t, PhaseEncryption, entry.Phase)
-	assert.Equal(t, "AES256GCMEncrypt()", entry.Function)
+	assert.Equal(t, "XChaCha20Poly1305Encrypt()", entry.Function)
 	assert.Equal(t, StatusSuccess, entry.Status)
 	assert.Equal(t, int64(100*time.Millisecond), entry.DurationNs)
 	assert.Equal(t, "test details", entry.Details)
@@ -44,7 +44,7 @@ func TestOperationLogger_Log(t *testing.T) {
 	// Check JSON output
 	output := buf.String()
 	assert.Contains(t, output, "Encryption")
-	assert.Contains(t, output, "AES256GCMEncrypt")
+	assert.Contains(t, output, "XChaCha20Poly1305Encrypt")
 	assert.Contains(t, output, "SUCCESS")
 }
 
@@ -114,7 +114,7 @@ func TestOperationLogger_SecurityAlert(t *testing.T) {
 	logger := NewOperationLogger(OpStoreKey, "bundle-123", "req-456")
 	logger.SetOutput(&buf)
 
-	logger.SecurityAlert(PhaseEncryption, "AES256GCMEncrypt()", "Encryption failed")
+	logger.SecurityAlert(PhaseEncryption, "XChaCha20Poly1305Encrypt()", "Encryption failed")
 
 	entries := logger.GetEntries()
 	require.Len(t, entries, 1)

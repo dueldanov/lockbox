@@ -6,21 +6,28 @@ package b2b
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/dueldanov/lockbox/v2/internal/b2b/api"
-	"github.com/dueldanov/lockbox/v2/internal/interfaces"
-	"github.com/dueldanov/lockbox/v2/internal/payment"
-	"github.com/dueldanov/lockbox/v2/internal/service"
 	"github.com/iotaledger/hive.go/kvstore"
 	"github.com/iotaledger/hive.go/logger"
 	iotago "github.com/iotaledger/iota.go/v3"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+
+	"github.com/dueldanov/lockbox/v2/internal/b2b/api"
+	"github.com/dueldanov/lockbox/v2/internal/interfaces"
+	"github.com/dueldanov/lockbox/v2/internal/lockscript"
+	"github.com/dueldanov/lockbox/v2/internal/payment"
+	"github.com/dueldanov/lockbox/v2/internal/service"
 )
 
 // Partner represents a registered B2B partner.
@@ -43,6 +50,19 @@ type B2BServer struct {
 	revenueManager   *RevenueManager
 	paymentProcessor *payment.PaymentProcessor
 
+	scriptEngine *lockscript.Engine
+	scriptsMu    sync.RWMutex
+	scripts      map[string]*lockscript.CompiledScript
+
+	vaultsMu sync.RWMutex
+	vaults   map[string]*vaultRecord
+
+	accountsMu sync.RWMutex
+	accounts   map[string]*accountRecord
+
+	transactionsMu sync.RWMutex
+	transactions   map[string]*transactionRecord
+
 	// Partner management
 	partners   map[string]*Partner
 	partnersMu sync.RWMutex
@@ -53,6 +73,46 @@ type B2BServer struct {
 
 	// Statistics tracking
 	store kvstore.KVStore
+}
+
+type vaultRecord struct {
+	ID           string
+	Name         string
+	Owner        string
+	CreatedAt    time.Time
+	LastRotation time.Time
+	Metadata     map[string]string
+	Keys         map[string]*vaultKey
+}
+
+type vaultKey struct {
+	ID        string
+	KeyType   string
+	KeyName   string
+	PublicKey string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
+type accountRecord struct {
+	ID           string
+	Tier         interfaces.Tier
+	CreatedAt    time.Time
+	LastActivity time.Time
+	Usage        *usageStats
+}
+
+type usageStats struct {
+	TransactionsHour  int32
+	StorageUsed       int64
+	ContractsDeployed int32
+	LastReset         time.Time
+}
+
+type transactionRecord struct {
+	Status    *api.TransactionStatus
+	Data      []byte
+	Timestamp time.Time
 }
 
 // NewB2BServer creates a new B2B gRPC server instance.
@@ -73,11 +133,26 @@ func NewB2BServer(
 	paymentProc *payment.PaymentProcessor,
 	store kvstore.KVStore,
 ) *B2BServer {
+	if paymentProc == nil {
+		paymentProc = payment.NewPaymentProcessor(nil)
+	}
+
+	tierCaps := service.GetCapabilities(service.TierStandard)
+	memoryLimit := tierCaps.ScriptComplexity * 65536
+	if memoryLimit <= 0 {
+		memoryLimit = 65536
+	}
+
 	return &B2BServer{
 		WrappedLogger:    logger.NewWrappedLogger(log),
 		lockboxService:   lockboxSvc,
 		revenueManager:   revenueMgr,
 		paymentProcessor: paymentProc,
+		scriptEngine:     lockscript.NewEngine(nil, memoryLimit, 5*time.Second),
+		scripts:          make(map[string]*lockscript.CompiledScript),
+		vaults:           make(map[string]*vaultRecord),
+		accounts:         make(map[string]*accountRecord),
+		transactions:     make(map[string]*transactionRecord),
 		partners:         make(map[string]*Partner),
 		bundlePartners:   make(map[string]string),
 		store:            store,
@@ -358,14 +433,14 @@ func (s *B2BServer) GetRevenueShare(ctx context.Context, req *api.GetRevenueShar
 	// TODO: Get recent transactions from storage
 
 	return &api.GetRevenueShareResponse{
-		PartnerId:               partner.ID,
-		PendingAmount:           pendingAmount,
-		TotalEarned:             totalEarned,
-		TotalPaid:               totalPaid,
-		SharePercentage:         partner.SharePercentage,
-		Transactions:            []*api.RevenueTransaction{}, // TODO: Populate
-		NextPayoutDate:          nextPayoutDate,
-		MinimumPayoutThreshold:  1000000, // 1 MIOTA
+		PartnerId:              partner.ID,
+		PendingAmount:          pendingAmount,
+		TotalEarned:            totalEarned,
+		TotalPaid:              totalPaid,
+		SharePercentage:        partner.SharePercentage,
+		Transactions:           []*api.RevenueTransaction{}, // TODO: Populate
+		NextPayoutDate:         nextPayoutDate,
+		MinimumPayoutThreshold: 1000000, // 1 MIOTA
 	}, nil
 }
 
@@ -404,11 +479,11 @@ func (s *B2BServer) GetPartnerStats(ctx context.Context, req *api.GetPartnerStat
 		TotalKeysStored:     stats.TotalTransactions, // Approximation
 		TotalKeysRetrieved:  0,                       // TODO: Track separately
 		ActiveBundles:       activeBundles,
-		TotalStorageFees:    0,                       // TODO: Track separately
+		TotalStorageFees:    0, // TODO: Track separately
 		TotalRetrievalFees:  stats.TotalRevenue,
-		AverageLockDuration: 0,                       // TODO: Calculate
+		AverageLockDuration: 0, // TODO: Calculate
 		LastActivityTime:    stats.LastActivityDate.Unix(),
-		DailyStats:          []*api.DailyStats{},     // TODO: Populate
+		DailyStats:          []*api.DailyStats{}, // TODO: Populate
 	}, nil
 }
 
@@ -440,6 +515,97 @@ func (s *B2BServer) authenticatePartner(partnerID, apiKey string) (*Partner, err
 	}
 
 	return partner, nil
+}
+
+func (s *B2BServer) partnerFromContext(ctx context.Context) (*Partner, error) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "missing metadata")
+	}
+
+	partnerID := firstMetadataValue(md, "partner-id", "partner_id")
+	apiKey := firstMetadataValue(md, "api-key", "api_key")
+	if partnerID == "" || apiKey == "" {
+		return nil, status.Error(codes.Unauthenticated, "missing partner credentials")
+	}
+
+	partner, err := s.authenticatePartner(partnerID, apiKey)
+	if err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, "authentication failed: %v", err)
+	}
+
+	return partner, nil
+}
+
+func firstMetadataValue(md metadata.MD, keys ...string) string {
+	for _, key := range keys {
+		values := md.Get(key)
+		if len(values) > 0 && values[0] != "" {
+			return values[0]
+		}
+	}
+	return ""
+}
+
+func (s *B2BServer) ensureAccount(partner *Partner) *accountRecord {
+	s.accountsMu.Lock()
+	defer s.accountsMu.Unlock()
+
+	account, exists := s.accounts[partner.ID]
+	if exists {
+		return account
+	}
+
+	account = &accountRecord{
+		ID:           partner.ID,
+		Tier:         partner.Tier,
+		CreatedAt:    time.Now(),
+		LastActivity: time.Now(),
+		Usage: &usageStats{
+			LastReset: time.Now(),
+		},
+	}
+	s.accounts[partner.ID] = account
+
+	return account
+}
+
+func (s *B2BServer) recordUsage(partner *Partner, usageType string, amount int64) {
+	account := s.ensureAccount(partner)
+
+	s.accountsMu.Lock()
+	defer s.accountsMu.Unlock()
+
+	if time.Since(account.Usage.LastReset) > time.Hour {
+		account.Usage.TransactionsHour = 0
+		account.Usage.LastReset = time.Now()
+	}
+
+	switch usageType {
+	case "transaction":
+		account.Usage.TransactionsHour++
+	case "storage":
+		account.Usage.StorageUsed += amount
+	case "contract":
+		account.Usage.ContractsDeployed++
+	}
+
+	account.LastActivity = time.Now()
+}
+
+func tierLabel(tier interfaces.Tier) string {
+	switch tier {
+	case interfaces.TierBasic:
+		return "Basic"
+	case interfaces.TierStandard:
+		return "Standard"
+	case interfaces.TierPremium:
+		return "Premium"
+	case interfaces.TierElite:
+		return "Elite"
+	default:
+		return "Unknown"
+	}
 }
 
 // parseIOTAAddress parses an IOTA address string.
@@ -479,57 +645,520 @@ func hashAPIKey(apiKey string) []byte {
 // =============================================================================
 
 func (s *B2BServer) CompileScript(ctx context.Context, req *api.CompileScriptRequest) (*api.CompileScriptResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "CompileScript not implemented")
+	partner, err := s.partnerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if strings.TrimSpace(req.Source) == "" {
+		return nil, status.Error(codes.InvalidArgument, "source is required")
+	}
+
+	caps := service.GetCapabilities(service.Tier(partner.Tier))
+	maxSize := caps.ScriptComplexity * 65536
+	if maxSize <= 0 {
+		maxSize = 65536
+	}
+	if len(req.Source) > maxSize {
+		return nil, status.Errorf(codes.InvalidArgument, "script size exceeds maximum of %d bytes", maxSize)
+	}
+
+	compiled, err := s.scriptEngine.CompileScript(ctx, req.Source)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "compilation failed: %v", err)
+	}
+
+	scriptID := fmt.Sprintf("script_%s_%d", partner.ID, time.Now().UnixNano())
+	s.scriptsMu.Lock()
+	s.scripts[scriptID] = compiled
+	s.scriptsMu.Unlock()
+
+	s.recordUsage(partner, "contract", 1)
+
+	return &api.CompileScriptResponse{
+		ScriptId: scriptID,
+		Bytecode: compiled.Bytecode,
+		Warnings: []string{},
+	}, nil
 }
 
 func (s *B2BServer) ExecuteScript(ctx context.Context, req *api.ExecuteScriptRequest) (*api.ExecuteScriptResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ExecuteScript not implemented")
+	partner, err := s.partnerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if strings.TrimSpace(req.ScriptId) == "" {
+		return nil, status.Error(codes.InvalidArgument, "script_id is required")
+	}
+
+	s.scriptsMu.RLock()
+	script, exists := s.scripts[req.ScriptId]
+	s.scriptsMu.RUnlock()
+	if !exists {
+		return nil, status.Error(codes.NotFound, "script not found")
+	}
+
+	env := lockscript.NewEnvironment()
+	for k, v := range req.Environment {
+		env.Variables[k] = v
+	}
+
+	result, err := s.scriptEngine.ExecuteScript(ctx, script, env)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "execution failed: %v", err)
+	}
+
+	s.recordUsage(partner, "transaction", 1)
+
+	var output string
+	if result != nil && result.Value != nil {
+		output = fmt.Sprintf("%v", result.Value)
+	}
+
+	var gasUsed uint64
+	var logs []string
+	if result != nil {
+		gasUsed = result.GasUsed
+		logs = result.Logs
+	}
+
+	return &api.ExecuteScriptResponse{
+		Success: result != nil && result.Success,
+		Output:  output,
+		GasUsed: gasUsed,
+		Logs:    logs,
+	}, nil
 }
 
 func (s *B2BServer) ValidateScript(ctx context.Context, req *api.ValidateScriptRequest) (*api.ValidateScriptResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ValidateScript not implemented")
+	partner, err := s.partnerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if strings.TrimSpace(req.Source) == "" {
+		return &api.ValidateScriptResponse{
+			Valid:  false,
+			Errors: []string{"source is required"},
+		}, nil
+	}
+
+	caps := service.GetCapabilities(service.Tier(partner.Tier))
+	maxSize := caps.ScriptComplexity * 65536
+	if maxSize <= 0 {
+		maxSize = 65536
+	}
+	if len(req.Source) > maxSize {
+		return &api.ValidateScriptResponse{
+			Valid:  false,
+			Errors: []string{fmt.Sprintf("script size exceeds maximum of %d bytes", maxSize)},
+		}, nil
+	}
+
+	_, err = s.scriptEngine.CompileScript(ctx, req.Source)
+	if err != nil {
+		return &api.ValidateScriptResponse{
+			Valid:  false,
+			Errors: []string{err.Error()},
+		}, nil
+	}
+
+	s.recordUsage(partner, "contract", 1)
+
+	return &api.ValidateScriptResponse{
+		Valid:  true,
+		Errors: []string{},
+	}, nil
 }
 
 func (s *B2BServer) CreateVault(ctx context.Context, req *api.CreateVaultRequest) (*api.CreateVaultResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "CreateVault not implemented")
+	partner, err := s.partnerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if strings.TrimSpace(req.Name) == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+
+	vaultID := fmt.Sprintf("vault_%s_%d", partner.ID, time.Now().UnixNano())
+	record := &vaultRecord{
+		ID:        vaultID,
+		Name:      req.Name,
+		Owner:     partner.ID,
+		CreatedAt: time.Now(),
+		Metadata:  req.Metadata,
+		Keys:      make(map[string]*vaultKey),
+	}
+
+	s.vaultsMu.Lock()
+	s.vaults[vaultID] = record
+	s.vaultsMu.Unlock()
+
+	s.recordUsage(partner, "storage", 0)
+
+	return &api.CreateVaultResponse{
+		VaultId: vaultID,
+	}, nil
 }
 
 func (s *B2BServer) GenerateKey(ctx context.Context, req *api.GenerateKeyRequest) (*api.GenerateKeyResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "GenerateKey not implemented")
+	partner, err := s.partnerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if strings.TrimSpace(req.VaultId) == "" {
+		return nil, status.Error(codes.InvalidArgument, "vault_id is required")
+	}
+
+	keyType := strings.ToLower(strings.TrimSpace(req.KeyType))
+	if keyType == "" {
+		keyType = "ed25519"
+	}
+	if keyType != "ed25519" {
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported key_type: %s", keyType)
+	}
+
+	s.vaultsMu.Lock()
+	vault, exists := s.vaults[req.VaultId]
+	if !exists {
+		s.vaultsMu.Unlock()
+		return nil, status.Error(codes.NotFound, "vault not found")
+	}
+
+	pubKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		s.vaultsMu.Unlock()
+		return nil, status.Errorf(codes.Internal, "failed to generate key: %v", err)
+	}
+
+	keyID := fmt.Sprintf("key_%s_%d", partner.ID, time.Now().UnixNano())
+	keyName := strings.TrimSpace(req.KeyName)
+	if keyName == "" {
+		keyName = keyID
+	}
+
+	vault.Keys[keyID] = &vaultKey{
+		ID:        keyID,
+		KeyType:   keyType,
+		KeyName:   keyName,
+		PublicKey: hex.EncodeToString(pubKey),
+		CreatedAt: time.Now(),
+	}
+	s.vaultsMu.Unlock()
+
+	s.recordUsage(partner, "storage", 0)
+
+	return &api.GenerateKeyResponse{
+		KeyId:     keyID,
+		PublicKey: hex.EncodeToString(pubKey),
+	}, nil
 }
 
 func (s *B2BServer) RotateKeys(ctx context.Context, req *api.RotateKeysRequest) (*api.RotateKeysResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "RotateKeys not implemented")
+	partner, err := s.partnerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if strings.TrimSpace(req.VaultId) == "" {
+		return nil, status.Error(codes.InvalidArgument, "vault_id is required")
+	}
+	if len(req.KeyIds) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "key_ids is required")
+	}
+
+	s.vaultsMu.Lock()
+	vault, exists := s.vaults[req.VaultId]
+	if !exists {
+		s.vaultsMu.Unlock()
+		return nil, status.Error(codes.NotFound, "vault not found")
+	}
+
+	newKeyIDs := make(map[string]string)
+	for _, keyID := range req.KeyIds {
+		key, ok := vault.Keys[keyID]
+		if !ok {
+			s.vaultsMu.Unlock()
+			return nil, status.Errorf(codes.NotFound, "key not found: %s", keyID)
+		}
+
+		if strings.ToLower(key.KeyType) != "ed25519" {
+			s.vaultsMu.Unlock()
+			return nil, status.Errorf(codes.InvalidArgument, "unsupported key_type: %s", key.KeyType)
+		}
+
+		pubKey, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			s.vaultsMu.Unlock()
+			return nil, status.Errorf(codes.Internal, "failed to generate key: %v", err)
+		}
+
+		newKeyID := fmt.Sprintf("key_%s_%d", partner.ID, time.Now().UnixNano())
+		newKeyIDs[keyID] = newKeyID
+		delete(vault.Keys, keyID)
+		vault.Keys[newKeyID] = &vaultKey{
+			ID:        newKeyID,
+			KeyType:   key.KeyType,
+			KeyName:   key.KeyName,
+			PublicKey: hex.EncodeToString(pubKey),
+			CreatedAt: time.Now(),
+		}
+	}
+	vault.LastRotation = time.Now()
+	s.vaultsMu.Unlock()
+
+	s.recordUsage(partner, "transaction", int64(len(req.KeyIds)))
+
+	return &api.RotateKeysResponse{
+		Success:   true,
+		NewKeyIds: newKeyIDs,
+	}, nil
 }
 
 func (s *B2BServer) GetVaultInfo(ctx context.Context, req *api.GetVaultInfoRequest) (*api.VaultInfo, error) {
-	return nil, status.Error(codes.Unimplemented, "GetVaultInfo not implemented")
+	_, err := s.partnerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if strings.TrimSpace(req.VaultId) == "" {
+		return nil, status.Error(codes.InvalidArgument, "vault_id is required")
+	}
+
+	s.vaultsMu.RLock()
+	vault, exists := s.vaults[req.VaultId]
+	s.vaultsMu.RUnlock()
+	if !exists {
+		return nil, status.Error(codes.NotFound, "vault not found")
+	}
+
+	keys := make([]*api.KeyInfo, 0, len(vault.Keys))
+	for _, key := range vault.Keys {
+		keys = append(keys, &api.KeyInfo{
+			KeyId:     key.ID,
+			KeyType:   key.KeyType,
+			KeyName:   key.KeyName,
+			CreatedAt: key.CreatedAt.Unix(),
+			ExpiresAt: key.ExpiresAt.Unix(),
+		})
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return keys[i].KeyId < keys[j].KeyId
+	})
+
+	return &api.VaultInfo{
+		VaultId:      vault.ID,
+		Owner:        vault.Owner,
+		CreatedAt:    vault.CreatedAt.Unix(),
+		LastRotation: vault.LastRotation.Unix(),
+		Keys:         keys,
+		Metadata:     vault.Metadata,
+	}, nil
 }
 
 func (s *B2BServer) GetAccountInfo(ctx context.Context, req *api.GetAccountInfoRequest) (*api.AccountInfo, error) {
-	return nil, status.Error(codes.Unimplemented, "GetAccountInfo not implemented")
+	partner, err := s.partnerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if req.AccountId != "" && req.AccountId != partner.ID {
+		return nil, status.Error(codes.PermissionDenied, "account access denied")
+	}
+
+	account := s.ensureAccount(partner)
+
+	usage := &api.UsageStats{
+		TransactionsHour:  account.Usage.TransactionsHour,
+		StorageUsed:       account.Usage.StorageUsed,
+		ContractsDeployed: account.Usage.ContractsDeployed,
+		LastReset:         account.Usage.LastReset.Unix(),
+	}
+
+	return &api.AccountInfo{
+		AccountId:    account.ID,
+		Tier:         tierLabel(account.Tier),
+		CreatedAt:    account.CreatedAt.Unix(),
+		LastActivity: account.LastActivity.Unix(),
+		Usage:        usage,
+		Metadata:     map[string]string{},
+	}, nil
 }
 
 func (s *B2BServer) UpgradeTier(ctx context.Context, req *api.UpgradeTierRequest) (*api.UpgradeTierResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "UpgradeTier not implemented")
+	partner, err := s.partnerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if req.AccountId != "" && req.AccountId != partner.ID {
+		return nil, status.Error(codes.PermissionDenied, "account access denied")
+	}
+
+	if strings.TrimSpace(req.NewTier) == "" {
+		return nil, status.Error(codes.InvalidArgument, "new_tier is required")
+	}
+
+	newTier, err := interfaces.TierFromString(strings.ToLower(req.NewTier))
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid tier: %v", err)
+	}
+
+	s.partnersMu.Lock()
+	partner.Tier = newTier
+	s.partnersMu.Unlock()
+
+	account := s.ensureAccount(partner)
+	s.accountsMu.Lock()
+	account.Tier = newTier
+	s.accountsMu.Unlock()
+
+	return &api.UpgradeTierResponse{
+		Success: true,
+		Message: fmt.Sprintf("upgraded to %s", tierLabel(newTier)),
+	}, nil
 }
 
 func (s *B2BServer) GetUsageStats(ctx context.Context, req *api.GetUsageStatsRequest) (*api.UsageStats, error) {
-	return nil, status.Error(codes.Unimplemented, "GetUsageStats not implemented")
+	partner, err := s.partnerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if req.AccountId != "" && req.AccountId != partner.ID {
+		return nil, status.Error(codes.PermissionDenied, "account access denied")
+	}
+
+	account := s.ensureAccount(partner)
+
+	return &api.UsageStats{
+		TransactionsHour:  account.Usage.TransactionsHour,
+		StorageUsed:       account.Usage.StorageUsed,
+		ContractsDeployed: account.Usage.ContractsDeployed,
+		LastReset:         account.Usage.LastReset.Unix(),
+	}, nil
 }
 
 func (s *B2BServer) SubmitTransaction(ctx context.Context, req *api.SubmitTransactionRequest) (*api.SubmitTransactionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "SubmitTransaction not implemented")
+	partner, err := s.partnerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(req.TransactionData) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "transaction_data is required")
+	}
+
+	txID := fmt.Sprintf("tx_%s_%d", partner.ID, time.Now().UnixNano())
+	statusText := "submitted"
+
+	record := &transactionRecord{
+		Status: &api.TransactionStatus{
+			TransactionId: txID,
+			Status:        statusText,
+			Timestamp:     time.Now().Unix(),
+		},
+		Data:      req.TransactionData,
+		Timestamp: time.Now(),
+	}
+
+	s.transactionsMu.Lock()
+	s.transactions[txID] = record
+	s.transactionsMu.Unlock()
+
+	s.recordUsage(partner, "transaction", 1)
+
+	return &api.SubmitTransactionResponse{
+		TransactionId: txID,
+		Status:        statusText,
+	}, nil
 }
 
 func (s *B2BServer) GetTransactionStatus(ctx context.Context, req *api.GetTransactionStatusRequest) (*api.TransactionStatus, error) {
-	return nil, status.Error(codes.Unimplemented, "GetTransactionStatus not implemented")
+	_, err := s.partnerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if strings.TrimSpace(req.TransactionId) == "" {
+		return nil, status.Error(codes.InvalidArgument, "transaction_id is required")
+	}
+
+	s.transactionsMu.RLock()
+	record, exists := s.transactions[req.TransactionId]
+	s.transactionsMu.RUnlock()
+	if !exists {
+		return nil, status.Error(codes.NotFound, "transaction not found")
+	}
+
+	return record.Status, nil
 }
 
 func (s *B2BServer) StreamTransactions(req *api.StreamTransactionsRequest, stream api.LockBoxAPI_StreamTransactionsServer) error {
-	return status.Error(codes.Unimplemented, "StreamTransactions not implemented")
+	partner, err := s.partnerFromContext(stream.Context())
+	if err != nil {
+		return err
+	}
+
+	startTime := time.Unix(req.StartTime, 0)
+
+	s.transactionsMu.RLock()
+	records := make([]*transactionRecord, 0, len(s.transactions))
+	for _, record := range s.transactions {
+		records = append(records, record)
+	}
+	s.transactionsMu.RUnlock()
+
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Timestamp.Before(records[j].Timestamp)
+	})
+
+	for _, record := range records {
+		if !record.Timestamp.After(startTime) {
+			continue
+		}
+		tx := &api.Transaction{
+			TransactionId: record.Status.TransactionId,
+			Data:          record.Data,
+			Timestamp:     record.Timestamp.Unix(),
+			Sender:        partner.ID,
+			Receiver:      "",
+			Metadata:      map[string]string{},
+		}
+		if err := stream.Send(tx); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s *B2BServer) StreamEvents(req *api.StreamEventsRequest, stream api.LockBoxAPI_StreamEventsServer) error {
-	return status.Error(codes.Unimplemented, "StreamEvents not implemented")
+	partner, err := s.partnerFromContext(stream.Context())
+	if err != nil {
+		return err
+	}
+
+	if len(req.EventTypes) == 0 {
+		return nil
+	}
+
+	for _, eventType := range req.EventTypes {
+		if strings.EqualFold(eventType, "stream_start") {
+			ev := &api.Event{
+				EventId:   fmt.Sprintf("evt_%s_%d", partner.ID, time.Now().UnixNano()),
+				EventType: "stream_start",
+				Timestamp: time.Now().Unix(),
+				Data: map[string]string{
+					"partner_id": partner.ID,
+				},
+			}
+			return stream.Send(ev)
+		}
+	}
+
+	return nil
 }

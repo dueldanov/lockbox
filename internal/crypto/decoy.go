@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/hkdf"
 )
 
 // DecoyType indicates whether a shard contains real or decoy data
@@ -72,9 +74,10 @@ func (g *DecoyGenerator) GenerateDecoyShards(realShardCount int, shardSize int) 
 	shardID := generateShardID()
 
 	for i := 0; i < decoyCount; i++ {
-		// Generate random decoy data of same size as real shards
-		decoyData := make([]byte, shardSize)
-		if _, err := io.ReadFull(rand.Reader, decoyData); err != nil {
+		// P1-02: Generate DETERMINISTIC decoy data via HKDF (not random)
+		// This ensures reproducibility and consistent timing with real shards
+		decoyData, err := g.generateDeterministicDecoyData(shardID, uint32(i), shardSize)
+		if err != nil {
 			return nil, fmt.Errorf("failed to generate decoy data: %w", err)
 		}
 
@@ -85,6 +88,7 @@ func (g *DecoyGenerator) GenerateDecoyShards(realShardCount int, shardSize int) 
 			for j := 0; j < i; j++ {
 				clearBytes(decoys[j].Data)
 			}
+			clearBytes(decoyData)
 			return nil, fmt.Errorf("failed to encrypt decoy %d: %w", i, err)
 		}
 
@@ -100,20 +104,106 @@ func (g *DecoyGenerator) GenerateDecoyShards(realShardCount int, shardSize int) 
 	return decoys, nil
 }
 
-// encryptDecoyCharShard encrypts a decoy character shard with a random key.
+// generateDeterministicDecoyData generates deterministic pseudorandom data via HKDF.
 //
-// SECURITY: Uses completely random key (NOT derived from master key).
-// This ensures that even with master key access, an attacker cannot
-// distinguish decoy from real shards by trying different KDF contexts.
-// The decoy key is generated fresh and discarded - we never need to
-// decrypt decoys, only real shards.
+// P1-02: This replaces crypto/rand.Reader to ensure:
+//   - Deterministic generation (same inputs = same output)
+//   - Uniform timing with real shard generation
+//   - Indistinguishability from real encrypted data
+//
+// Uses HKDF context: "LockBox:decoy-data:{shardID}:{index}"
+func (g *DecoyGenerator) generateDeterministicDecoyData(shardID uint32, index uint32, size int) ([]byte, error) {
+	if g.hkdfManager == nil {
+		return nil, fmt.Errorf("HKDF manager not available for deterministic decoy generation")
+	}
+
+	// Derive a seed key for this specific decoy
+	context := []byte(fmt.Sprintf("LockBox:decoy-data:%d:%d", shardID, index))
+	seedKey, err := g.hkdfManager.DeriveKey(context)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive decoy data seed: %w", err)
+	}
+	defer clearBytes(seedKey)
+
+	// Use the seed key with HKDF to generate pseudorandom data
+	// HKDF has a limit of ~8KB (255 * hash_len), so for larger sizes we use multiple rounds
+	data := make([]byte, size)
+
+	// Generate data in chunks to avoid HKDF entropy limit
+	const maxChunkSize = 8000 // Conservative limit (below 255*32=8160)
+	offset := 0
+
+	for offset < size {
+		chunkSize := size - offset
+		if chunkSize > maxChunkSize {
+			chunkSize = maxChunkSize
+		}
+
+		// Create HKDF reader for this chunk (include chunk index in context for uniqueness)
+		chunkContext := fmt.Sprintf("decoy-data-expansion-chunk-%d", offset/maxChunkSize)
+		hkdfReader := hkdf.New(sha256.New, seedKey, nil, []byte(chunkContext))
+
+		if _, err := io.ReadFull(hkdfReader, data[offset:offset+chunkSize]); err != nil {
+			return nil, fmt.Errorf("failed to expand decoy data chunk %d: %w", offset/maxChunkSize, err)
+		}
+
+		offset += chunkSize
+	}
+
+	return data, nil
+}
+
+// generateDeterministicNonce generates a deterministic nonce via HKDF.
+//
+// P1-02: Replaces crypto/rand.Reader for nonce generation.
+//
+// Parameters:
+//   - shardID: unique shard identifier
+//   - index: shard index (ensures uniqueness)
+//
+// Returns:
+//   - 24-byte nonce (XChaCha20-Poly1305 nonce size)
+//
+// Uses HKDF context: "LockBox:decoy-nonce:{shardID}:{index}"
+func (g *DecoyGenerator) generateDeterministicNonce(shardID uint32, index uint32) ([]byte, error) {
+	if g.hkdfManager == nil {
+		return nil, fmt.Errorf("HKDF manager not available for nonce generation")
+	}
+
+	// Derive nonce seed for this specific decoy
+	context := []byte(fmt.Sprintf("LockBox:decoy-nonce:%d:%d", shardID, index))
+	nonceSeed, err := g.hkdfManager.DeriveKey(context)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive nonce seed: %w", err)
+	}
+	defer clearBytes(nonceSeed)
+
+	// Extract 24 bytes for XChaCha20-Poly1305 nonce from the 32-byte seed
+	nonce := make([]byte, NonceSize)
+	copy(nonce, nonceSeed[:NonceSize])
+
+	return nonce, nil
+}
+
+// encryptDecoyCharShard encrypts a decoy character shard with HKDF-derived key.
+//
+// P1-02: Now uses HKDF key derivation (deterministic) instead of random.
+//
+// SECURITY: Uses HKDF-derived key from master key via DeriveKeyForDecoyChar().
+// This ensures deterministic, reproducible encryption while maintaining
+// indistinguishability from real shards. The decoy key is derived consistently
+// from the master key + salt, allowing recreation if needed (though decoys
+// are never decrypted in normal operation).
 func (g *DecoyGenerator) encryptDecoyCharShard(data []byte, shardID uint32, index uint32, total uint32) (*CharacterShard, error) {
-	// SECURITY FIX: Generate completely random key for decoy encryption.
-	// NOT derived from master key - prevents KDF context leak attack.
-	// Since decoys are never decrypted, the key is ephemeral and discarded.
-	decoyKey := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, decoyKey); err != nil {
-		return nil, fmt.Errorf("failed to generate random decoy key: %w", err)
+	if g.hkdfManager == nil {
+		return nil, fmt.Errorf("HKDF manager not available for decoy encryption")
+	}
+
+	// P1-02: Derive decoy encryption key via HKDF (deterministic)
+	// Uses context "LockBox:decoy-char:{index}"
+	decoyKey, err := g.hkdfManager.DeriveKeyForDecoyChar(index)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive decoy encryption key: %w", err)
 	}
 	defer clearBytes(decoyKey)
 
@@ -123,9 +213,10 @@ func (g *DecoyGenerator) encryptDecoyCharShard(data []byte, shardID uint32, inde
 		return nil, fmt.Errorf("failed to create cipher: %w", err)
 	}
 
-	// Generate nonce
-	nonce := make([]byte, NonceSize)
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+	// P1-02: Generate DETERMINISTIC nonce via HKDF
+	// Uses context "LockBox:decoy-nonce:{shardID}:{index}"
+	nonce, err := g.generateDeterministicNonce(shardID, index)
+	if err != nil {
 		return nil, fmt.Errorf("failed to generate nonce: %w", err)
 	}
 
@@ -173,9 +264,9 @@ func (g *DecoyGenerator) GenerateDecoyMetadata(realMetaCount int, metaSize int) 
 	shardID := generateShardID()
 
 	for i := 0; i < decoyCount; i++ {
-		// Generate random decoy metadata
-		decoyMeta := make([]byte, metaSize)
-		if _, err := io.ReadFull(rand.Reader, decoyMeta); err != nil {
+		// P1-02: Generate DETERMINISTIC decoy metadata via HKDF (not random)
+		decoyMeta, err := g.generateDeterministicDecoyMetadata(shardID, uint32(i), metaSize)
+		if err != nil {
 			return nil, fmt.Errorf("failed to generate decoy metadata: %w", err)
 		}
 
@@ -185,6 +276,7 @@ func (g *DecoyGenerator) GenerateDecoyMetadata(realMetaCount int, metaSize int) 
 			for j := 0; j < i; j++ {
 				clearBytes(decoys[j].Data)
 			}
+			clearBytes(decoyMeta)
 			return nil, fmt.Errorf("failed to encrypt decoy metadata %d: %w", i, err)
 		}
 
@@ -200,16 +292,89 @@ func (g *DecoyGenerator) GenerateDecoyMetadata(realMetaCount int, metaSize int) 
 	return decoys, nil
 }
 
-// encryptDecoyMetaShard encrypts a decoy metadata shard with a random key.
+// generateDeterministicDecoyMetadata generates deterministic pseudorandom metadata via HKDF.
 //
-// SECURITY: Uses completely random key (NOT derived from master key).
-// Same security rationale as encryptDecoyCharShard - prevents KDF context leak.
+// P1-02: Similar to generateDeterministicDecoyData but for metadata.
+//
+// Uses HKDF context: "LockBox:decoy-metadata:{shardID}:{index}"
+func (g *DecoyGenerator) generateDeterministicDecoyMetadata(shardID uint32, index uint32, size int) ([]byte, error) {
+	if g.hkdfManager == nil {
+		return nil, fmt.Errorf("HKDF manager not available for deterministic decoy metadata generation")
+	}
+
+	// Derive a seed key for this specific decoy metadata
+	context := []byte(fmt.Sprintf("LockBox:decoy-metadata:%d:%d", shardID, index))
+	seedKey, err := g.hkdfManager.DeriveKey(context)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive decoy metadata seed: %w", err)
+	}
+	defer clearBytes(seedKey)
+
+	// Use the seed key with HKDF to generate pseudorandom metadata
+	// Similar chunking strategy as generateDeterministicDecoyData to avoid entropy limit
+	data := make([]byte, size)
+
+	const maxChunkSize = 8000 // Conservative limit to avoid HKDF entropy exhaustion
+	offset := 0
+
+	for offset < size {
+		chunkSize := size - offset
+		if chunkSize > maxChunkSize {
+			chunkSize = maxChunkSize
+		}
+
+		chunkContext := fmt.Sprintf("decoy-metadata-expansion-chunk-%d", offset/maxChunkSize)
+		hkdfReader := hkdf.New(sha256.New, seedKey, nil, []byte(chunkContext))
+
+		if _, err := io.ReadFull(hkdfReader, data[offset:offset+chunkSize]); err != nil {
+			return nil, fmt.Errorf("failed to expand decoy metadata chunk %d: %w", offset/maxChunkSize, err)
+		}
+
+		offset += chunkSize
+	}
+
+	return data, nil
+}
+
+// generateDeterministicMetaNonce generates a deterministic nonce for metadata via HKDF.
+//
+// P1-02: Similar to generateDeterministicNonce but for metadata.
+//
+// Uses HKDF context: "LockBox:decoy-meta-nonce:{shardID}:{index}"
+func (g *DecoyGenerator) generateDeterministicMetaNonce(shardID uint32, index uint32) ([]byte, error) {
+	if g.hkdfManager == nil {
+		return nil, fmt.Errorf("HKDF manager not available for meta nonce generation")
+	}
+
+	// Derive nonce seed for this specific decoy metadata
+	context := []byte(fmt.Sprintf("LockBox:decoy-meta-nonce:%d:%d", shardID, index))
+	nonceSeed, err := g.hkdfManager.DeriveKey(context)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive meta nonce seed: %w", err)
+	}
+	defer clearBytes(nonceSeed)
+
+	// Extract 24 bytes for XChaCha20-Poly1305 nonce
+	nonce := make([]byte, NonceSize)
+	copy(nonce, nonceSeed[:NonceSize])
+
+	return nonce, nil
+}
+
+// encryptDecoyMetaShard encrypts a decoy metadata shard with HKDF-derived key.
+//
+// P1-02: Now uses HKDF key derivation (deterministic) instead of random.
+// Same approach as encryptDecoyCharShard but for metadata.
 func (g *DecoyGenerator) encryptDecoyMetaShard(data []byte, shardID uint32, index uint32, total uint32) (*CharacterShard, error) {
-	// SECURITY FIX: Generate completely random key for decoy metadata encryption.
-	// NOT derived from master key - prevents KDF context leak attack.
-	decoyKey := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, decoyKey); err != nil {
-		return nil, fmt.Errorf("failed to generate random decoy meta key: %w", err)
+	if g.hkdfManager == nil {
+		return nil, fmt.Errorf("HKDF manager not available for decoy metadata encryption")
+	}
+
+	// P1-02: Derive decoy metadata encryption key via HKDF (deterministic)
+	// Uses context "LockBoxMeta:decoy-meta:{index}"
+	decoyKey, err := g.hkdfManager.DeriveKeyForDecoyMeta(index)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive decoy meta encryption key: %w", err)
 	}
 	defer clearBytes(decoyKey)
 
@@ -219,10 +384,11 @@ func (g *DecoyGenerator) encryptDecoyMetaShard(data []byte, shardID uint32, inde
 		return nil, fmt.Errorf("failed to create cipher: %w", err)
 	}
 
-	// Generate nonce
-	nonce := make([]byte, NonceSize)
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	// P1-02: Generate DETERMINISTIC nonce for metadata via HKDF
+	// Uses context "LockBox:decoy-meta-nonce:{shardID}:{index}"
+	nonce, err := g.generateDeterministicMetaNonce(shardID, index)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate meta nonce: %w", err)
 	}
 
 	// Additional data for AEAD

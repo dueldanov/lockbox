@@ -8,15 +8,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dueldanov/lockbox/v2/internal/b2b/api"
-	"github.com/dueldanov/lockbox/v2/internal/interfaces"
-	"github.com/dueldanov/lockbox/v2/internal/payment"
 	"github.com/iotaledger/hive.go/app/configuration"
 	appLogger "github.com/iotaledger/hive.go/app/logger"
 	"github.com/iotaledger/hive.go/logger"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+
+	"github.com/dueldanov/lockbox/v2/internal/b2b/api"
+	"github.com/dueldanov/lockbox/v2/internal/interfaces"
+	"github.com/dueldanov/lockbox/v2/internal/payment"
 )
 
 // testAPIKey is the API key for the test partner (32 bytes)
@@ -232,6 +234,70 @@ func TestStoreKey_InvalidLockDuration(t *testing.T) {
 	require.Contains(t, st.Message(), "lock_duration")
 }
 
+func TestStoreKey_InvalidOwnerAddressFormat(t *testing.T) {
+	server := setupTestB2BServer(t)
+	ctx := context.Background()
+
+	req := &api.StoreKeyRequest{
+		PartnerId:           testPartner.ID,
+		ApiKey:              testAPIKey,
+		PrivateKey:          make([]byte, 32),
+		OwnerAddress:        "not-an-address",
+		LockDurationSeconds: 3600,
+	}
+
+	_, err := server.StoreKey(ctx, req)
+	require.Error(t, err)
+
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	require.Equal(t, codes.InvalidArgument, st.Code())
+	require.Contains(t, st.Message(), "invalid owner_address")
+}
+
+func TestStoreKey_InvalidMultiSigAddress(t *testing.T) {
+	server := setupTestB2BServer(t)
+	ctx := context.Background()
+
+	req := &api.StoreKeyRequest{
+		PartnerId:           testPartner.ID,
+		ApiKey:              testAPIKey,
+		PrivateKey:          make([]byte, 32),
+		OwnerAddress:        hex.EncodeToString(make([]byte, 32)),
+		LockDurationSeconds: 3600,
+		MultiSigAddresses:   []string{"bad-multisig"},
+	}
+
+	_, err := server.StoreKey(ctx, req)
+	require.Error(t, err)
+
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	require.Equal(t, codes.InvalidArgument, st.Code())
+	require.Contains(t, st.Message(), "invalid multi_sig_address")
+}
+
+func TestStoreKey_ServiceUnavailable(t *testing.T) {
+	server := setupTestB2BServer(t)
+	ctx := context.Background()
+
+	req := &api.StoreKeyRequest{
+		PartnerId:           testPartner.ID,
+		ApiKey:              testAPIKey,
+		PrivateKey:          make([]byte, 32),
+		OwnerAddress:        hex.EncodeToString(make([]byte, 32)),
+		LockDurationSeconds: 3600,
+	}
+
+	_, err := server.StoreKey(ctx, req)
+	require.Error(t, err)
+
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	require.Equal(t, codes.Unavailable, st.Code())
+	require.Contains(t, st.Message(), "lockbox service not initialized")
+}
+
 func TestStoreKey_InvalidPartner(t *testing.T) {
 	server := setupTestB2BServer(t)
 	ctx := context.Background()
@@ -385,6 +451,54 @@ func TestRetrieveKey_InvalidPartner(t *testing.T) {
 	require.Equal(t, codes.Unauthenticated, st.Code())
 }
 
+func TestRetrieveKey_BundlePartnerMismatch(t *testing.T) {
+	server := setupTestB2BServer(t)
+	ctx := context.Background()
+
+	server.bundlePartnersMu.Lock()
+	server.bundlePartners["bundle-mismatch"] = "other-partner"
+	server.bundlePartnersMu.Unlock()
+
+	req := &api.RetrieveKeyRequest{
+		PartnerId:    testPartner.ID,
+		ApiKey:       testAPIKey,
+		BundleId:     "bundle-mismatch",
+		AccessToken:  "some-access-token",
+		PaymentToken: "some-payment-token",
+		Nonce:        generateTestNonce(),
+	}
+
+	_, err := server.RetrieveKey(ctx, req)
+	require.Error(t, err)
+
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	require.Equal(t, codes.PermissionDenied, st.Code())
+	require.Contains(t, st.Message(), "bundle does not belong")
+}
+
+func TestRetrieveKey_ServiceUnavailable(t *testing.T) {
+	server := setupTestB2BServer(t)
+	ctx := context.Background()
+
+	req := &api.RetrieveKeyRequest{
+		PartnerId:    testPartner.ID,
+		ApiKey:       testAPIKey,
+		BundleId:     "bundle-1",
+		AccessToken:  "some-access-token",
+		PaymentToken: "some-payment-token",
+		Nonce:        generateTestNonce(),
+	}
+
+	_, err := server.RetrieveKey(ctx, req)
+	require.Error(t, err)
+
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	require.Equal(t, codes.Unavailable, st.Code())
+	require.Contains(t, st.Message(), "lockbox service not initialized")
+}
+
 // =============================================================================
 // GetRevenueShare Tests
 // =============================================================================
@@ -457,84 +571,97 @@ func TestGetPartnerStats_UnknownPartner(t *testing.T) {
 }
 
 // =============================================================================
-// Unimplemented Methods Tests
+// Script/Vault/Account/Transaction Tests
 // =============================================================================
 
-func TestUnimplementedMethods(t *testing.T) {
+func TestCompileValidateExecuteScript(t *testing.T) {
 	server := setupTestB2BServer(t)
-	ctx := context.Background()
+	ctx := b2bAuthContext(context.Background())
+	script := "1;"
 
-	// CompileScript
-	_, err := server.CompileScript(ctx, &api.CompileScriptRequest{})
-	require.Error(t, err)
-	st, _ := status.FromError(err)
-	require.Equal(t, codes.Unimplemented, st.Code())
+	validateResp, err := server.ValidateScript(ctx, &api.ValidateScriptRequest{
+		Source: script,
+	})
+	require.NoError(t, err)
+	require.True(t, validateResp.Valid)
 
-	// ExecuteScript
-	_, err = server.ExecuteScript(ctx, &api.ExecuteScriptRequest{})
-	require.Error(t, err)
-	st, _ = status.FromError(err)
-	require.Equal(t, codes.Unimplemented, st.Code())
+	compileResp, err := server.CompileScript(ctx, &api.CompileScriptRequest{
+		Source: script,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, compileResp.ScriptId)
+	require.NotEmpty(t, compileResp.Bytecode)
 
-	// ValidateScript
-	_, err = server.ValidateScript(ctx, &api.ValidateScriptRequest{})
-	require.Error(t, err)
-	st, _ = status.FromError(err)
-	require.Equal(t, codes.Unimplemented, st.Code())
+	execResp, err := server.ExecuteScript(ctx, &api.ExecuteScriptRequest{
+		ScriptId: compileResp.ScriptId,
+	})
+	require.NoError(t, err)
+	require.True(t, execResp.Success)
+}
 
-	// CreateVault
-	_, err = server.CreateVault(ctx, &api.CreateVaultRequest{})
-	require.Error(t, err)
-	st, _ = status.FromError(err)
-	require.Equal(t, codes.Unimplemented, st.Code())
+func TestVaultKeyLifecycle(t *testing.T) {
+	server := setupTestB2BServer(t)
+	ctx := b2bAuthContext(context.Background())
 
-	// GenerateKey
-	_, err = server.GenerateKey(ctx, &api.GenerateKeyRequest{})
-	require.Error(t, err)
-	st, _ = status.FromError(err)
-	require.Equal(t, codes.Unimplemented, st.Code())
+	createResp, err := server.CreateVault(ctx, &api.CreateVaultRequest{
+		Name: "test-vault",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, createResp.VaultId)
 
-	// RotateKeys
-	_, err = server.RotateKeys(ctx, &api.RotateKeysRequest{})
-	require.Error(t, err)
-	st, _ = status.FromError(err)
-	require.Equal(t, codes.Unimplemented, st.Code())
+	keyResp, err := server.GenerateKey(ctx, &api.GenerateKeyRequest{
+		VaultId: createResp.VaultId,
+		KeyType: "ed25519",
+		KeyName: "primary",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, keyResp.KeyId)
+	require.NotEmpty(t, keyResp.PublicKey)
 
-	// GetVaultInfo
-	_, err = server.GetVaultInfo(ctx, &api.GetVaultInfoRequest{})
-	require.Error(t, err)
-	st, _ = status.FromError(err)
-	require.Equal(t, codes.Unimplemented, st.Code())
+	infoResp, err := server.GetVaultInfo(ctx, &api.GetVaultInfoRequest{
+		VaultId: createResp.VaultId,
+	})
+	require.NoError(t, err)
+	require.Len(t, infoResp.Keys, 1)
 
-	// GetAccountInfo
-	_, err = server.GetAccountInfo(ctx, &api.GetAccountInfoRequest{})
-	require.Error(t, err)
-	st, _ = status.FromError(err)
-	require.Equal(t, codes.Unimplemented, st.Code())
+	rotateResp, err := server.RotateKeys(ctx, &api.RotateKeysRequest{
+		VaultId: createResp.VaultId,
+		KeyIds:  []string{keyResp.KeyId},
+	})
+	require.NoError(t, err)
+	require.True(t, rotateResp.Success)
+	require.Len(t, rotateResp.NewKeyIds, 1)
+}
 
-	// UpgradeTier
-	_, err = server.UpgradeTier(ctx, &api.UpgradeTierRequest{})
-	require.Error(t, err)
-	st, _ = status.FromError(err)
-	require.Equal(t, codes.Unimplemented, st.Code())
+func TestAccountUsageAndTransactions(t *testing.T) {
+	server := setupTestB2BServer(t)
+	ctx := b2bAuthContext(context.Background())
 
-	// GetUsageStats
-	_, err = server.GetUsageStats(ctx, &api.GetUsageStatsRequest{})
-	require.Error(t, err)
-	st, _ = status.FromError(err)
-	require.Equal(t, codes.Unimplemented, st.Code())
+	accountResp, err := server.GetAccountInfo(ctx, &api.GetAccountInfoRequest{})
+	require.NoError(t, err)
+	require.NotEmpty(t, accountResp.AccountId)
 
-	// SubmitTransaction
-	_, err = server.SubmitTransaction(ctx, &api.SubmitTransactionRequest{})
-	require.Error(t, err)
-	st, _ = status.FromError(err)
-	require.Equal(t, codes.Unimplemented, st.Code())
+	upgradeResp, err := server.UpgradeTier(ctx, &api.UpgradeTierRequest{
+		NewTier: "Premium",
+	})
+	require.NoError(t, err)
+	require.True(t, upgradeResp.Success)
 
-	// GetTransactionStatus
-	_, err = server.GetTransactionStatus(ctx, &api.GetTransactionStatusRequest{})
-	require.Error(t, err)
-	st, _ = status.FromError(err)
-	require.Equal(t, codes.Unimplemented, st.Code())
+	usageResp, err := server.GetUsageStats(ctx, &api.GetUsageStatsRequest{})
+	require.NoError(t, err)
+	require.NotNil(t, usageResp)
+
+	submitResp, err := server.SubmitTransaction(ctx, &api.SubmitTransactionRequest{
+		TransactionData: []byte("hello"),
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, submitResp.TransactionId)
+
+	statusResp, err := server.GetTransactionStatus(ctx, &api.GetTransactionStatusRequest{
+		TransactionId: submitResp.TransactionId,
+	})
+	require.NoError(t, err)
+	require.Equal(t, submitResp.TransactionId, statusResp.TransactionId)
 }
 
 // =============================================================================
@@ -546,4 +673,12 @@ func generateTestNonce() string {
 	randomBytes := make([]byte, 8)
 	rand.Read(randomBytes)
 	return fmt.Sprintf("%d_%x", timestamp, randomBytes)
+}
+
+func b2bAuthContext(ctx context.Context) context.Context {
+	md := metadata.New(map[string]string{
+		"partner-id": testPartner.ID,
+		"api-key":    testAPIKey,
+	})
+	return metadata.NewIncomingContext(ctx, md)
 }

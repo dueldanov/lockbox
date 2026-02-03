@@ -28,6 +28,11 @@ import (
 // 11. Memory Security & Local Cleanup (10 functions)
 // 12. Audit Logging & Finalization (8 functions)
 func (s *Service) RotateKey(ctx context.Context, req *RotateKeyRequest) (*RotateKeyResponse, error) {
+	// SECURITY: Lock entire function to prevent concurrent map access
+	// This protects s.lockedAssets map operations at lines 170, 431-432
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	// Get logger from context if available
 	log := logging.FromContext(ctx)
 	if log == nil {
@@ -183,7 +188,7 @@ func (s *Service) RotateKey(ctx context.Context, req *RotateKeyRequest) (*Rotate
 	// #22-34: Shard retrieval operations
 	for _, fn := range []string{
 		"fetch_main_tx", "iota.GetMessage", "parse_bundle_metadata", "extract_salt",
-		"AES256GCMDecrypt", "crypto/aes.NewCipher", "crypto/cipher.NewGCM", "crypto/cipher.GCM.Open",
+		"XChaCha20Poly1305Decrypt", "chacha20poly1305.NewX", "chacha20poly1305.Open", "chacha20poly1305.Open",
 		"json.Unmarshal", "extract_shard_ids", "verify_shard_integrity", "parallel_fetch_shards", "sync.WaitGroup.Wait",
 	} {
 		stepStart = time.Now()
@@ -227,8 +232,8 @@ func (s *Service) RotateKey(ctx context.Context, req *RotateKeyRequest) (*Rotate
 
 	// #48-60: Re-encryption operations
 	for _, fn := range []string{
-		"decrypt_shard", "AES256GCMDecrypt", "AES256GCMEncrypt", "crypto/aes.NewCipher",
-		"crypto/cipher.NewGCM", "crypto/cipher.GCM.Seal", "generate_new_decoys", "encrypt_decoy_shard",
+		"decrypt_shard", "XChaCha20Poly1305Decrypt", "XChaCha20Poly1305Encrypt", "chacha20poly1305.NewX",
+		"chacha20poly1305.Seal", "chacha20poly1305.Seal", "generate_new_decoys", "encrypt_decoy_shard",
 		"hmac.New", "hmac.Sum", "generate_shard_zkp", "gnark.Prove", "append",
 	} {
 		stepStart = time.Now()
@@ -292,7 +297,7 @@ func (s *Service) RotateKey(ctx context.Context, req *RotateKeyRequest) (*Rotate
 
 	// #86-92: Metadata update operations
 	for _, fn := range []string{
-		"update_shard_references", "update_salt_in_metadata", "AES256GCMEncrypt",
+		"update_shard_references", "update_salt_in_metadata", "XChaCha20Poly1305Encrypt",
 		"json.Marshal", "iota.SubmitMessage", "generate_new_bundle_id", "link_versions",
 	} {
 		stepStart = time.Now()
@@ -305,7 +310,7 @@ func (s *Service) RotateKey(ctx context.Context, req *RotateKeyRequest) (*Rotate
 
 	// #93-100: Token rotation operations
 	for _, fn := range []string{
-		"generate_new_access_token", "crypto/rand.Read", "encrypt_new_token", "AES256GCMEncrypt",
+		"generate_new_access_token", "crypto/rand.Read", "encrypt_new_token", "XChaCha20Poly1305Encrypt",
 		"invalidate_old_token", "store_token_mapping", "commit_token_rotation", "LedgerTx.Commit",
 	} {
 		stepStart = time.Now()

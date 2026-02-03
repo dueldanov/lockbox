@@ -155,6 +155,11 @@ func cleanupExpiredNonces() {
 // 8. Memory Security & Local Cleanup (8 functions)
 // 9. Audit Logging & Finalization (6 functions)
 func (s *Service) DeleteKey(ctx context.Context, req *DeleteKeyRequest) (*DeleteKeyResponse, error) {
+	// SECURITY: Lock entire function to prevent concurrent map access
+	// This protects s.lockedAssets map operations at lines 287, 484
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	opStart := time.Now()
 
 	// Get logger from context if available
@@ -312,9 +317,9 @@ func (s *Service) DeleteKey(ctx context.Context, req *DeleteKeyRequest) (*Delete
 	log.LogStepWithDuration(logging.PhaseShardEnumeration, "parse_bundle_metadata",
 		"metadata_valid=true", time.Since(stepStart), nil)
 
-	// #23: AES256GCMDecrypt
+	// #23: XChaCha20Poly1305Decrypt
 	stepStart = time.Now()
-	log.LogStepWithDuration(logging.PhaseShardEnumeration, "AES256GCMDecrypt",
+	log.LogStepWithDuration(logging.PhaseShardEnumeration, "XChaCha20Poly1305Decrypt",
 		"decryption_success=true", time.Since(stepStart), nil)
 
 	// #24: extract_shard_ids

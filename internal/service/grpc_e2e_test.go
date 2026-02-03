@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"testing"
 	"time"
@@ -59,12 +58,9 @@ func TestGRPC_GetServiceInfo(t *testing.T) {
 	svc := createTestService(t)
 
 	// Start gRPC server on random port
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := listener.Addr().String()
-	listener.Close()
+	addr := listenTestGRPC(t)
 
-	grpcServer, err := NewGRPCServer(svc, addr, false, "", "")
+	grpcServer, err := NewGRPCServer(svc, nil, addr, false, "", "")
 	require.NoError(t, err)
 
 	// Start server in goroutine
@@ -109,12 +105,9 @@ func TestGRPC_LockAsset_Flow(t *testing.T) {
 	svc := createTestService(t)
 
 	// Start gRPC server
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := listener.Addr().String()
-	listener.Close()
+	addr := listenTestGRPC(t)
 
-	grpcServer, err := NewGRPCServer(svc, addr, false, "", "")
+	grpcServer, err := NewGRPCServer(svc, nil, addr, false, "", "")
 	require.NoError(t, err)
 
 	go func() {
@@ -170,12 +163,9 @@ func TestGRPC_UnlockAsset_BeforeTime(t *testing.T) {
 	svc := createTestService(t)
 
 	// Start gRPC server
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := listener.Addr().String()
-	listener.Close()
+	addr := listenTestGRPC(t)
 
-	grpcServer, err := NewGRPCServer(svc, addr, false, "", "")
+	grpcServer, err := NewGRPCServer(svc, nil, addr, false, "", "")
 	require.NoError(t, err)
 
 	go func() {
@@ -222,12 +212,9 @@ func TestGRPC_EmergencyUnlock(t *testing.T) {
 	svc := createTestService(t)
 
 	// Start gRPC server
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := listener.Addr().String()
-	listener.Close()
+	addr := listenTestGRPC(t)
 
-	grpcServer, err := NewGRPCServer(svc, addr, false, "", "")
+	grpcServer, err := NewGRPCServer(svc, nil, addr, false, "", "")
 	require.NoError(t, err)
 
 	go func() {
