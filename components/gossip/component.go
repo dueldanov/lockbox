@@ -11,9 +11,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"go.uber.org/dig"
 
-	"github.com/iotaledger/hive.go/app"
-	"github.com/iotaledger/hive.go/lo"
-	"github.com/iotaledger/hive.go/runtime/timeutil"
 	"github.com/dueldanov/lockbox/v2/pkg/components"
 	"github.com/dueldanov/lockbox/v2/pkg/daemon"
 	"github.com/dueldanov/lockbox/v2/pkg/metrics"
@@ -26,6 +23,9 @@ import (
 	"github.com/dueldanov/lockbox/v2/pkg/pruning"
 	"github.com/dueldanov/lockbox/v2/pkg/snapshot"
 	"github.com/dueldanov/lockbox/v2/pkg/tangle"
+	"github.com/iotaledger/hive.go/app"
+	"github.com/iotaledger/hive.go/lo"
+	"github.com/iotaledger/hive.go/runtime/timeutil"
 )
 
 const (
@@ -90,6 +90,7 @@ func provide(c *dig.Container) error {
 		PeeringManager  *p2p.Manager
 		ProtocolManager *proto.Manager
 		Profile         *profile.Profile
+		MinPreviousRefs int `name:"dagMinPreviousRefs"`
 	}
 
 	if err := c.Provide(func(deps msgProcDeps) *gossip.MessageProcessor {
@@ -102,6 +103,7 @@ func provide(c *dig.Container) error {
 			deps.ProtocolManager,
 			&gossip.Options{
 				WorkUnitCacheOpts: deps.Profile.Caches.IncomingBlocksFilter,
+				MinPreviousRefs:   deps.MinPreviousRefs,
 			})
 		if err != nil {
 			Component.LogPanicf("MessageProcessor initialization failed: %s", err)

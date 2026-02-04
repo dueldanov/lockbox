@@ -2,19 +2,20 @@ package tipselect
 
 import (
 	"context"
+	stdErrors "errors"
 	"fmt"
 	"time"
 
 	"github.com/pkg/errors"
 	"go.uber.org/atomic"
 
-	"github.com/iotaledger/hive.go/runtime/event"
-	"github.com/iotaledger/hive.go/runtime/syncutils"
 	"github.com/dueldanov/lockbox/v2/pkg/common"
 	"github.com/dueldanov/lockbox/v2/pkg/metrics"
 	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
 	"github.com/dueldanov/lockbox/v2/pkg/model/syncmanager"
 	"github.com/dueldanov/lockbox/v2/pkg/tangle"
+	"github.com/iotaledger/hive.go/runtime/event"
+	"github.com/iotaledger/hive.go/runtime/syncutils"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 
@@ -42,6 +43,8 @@ const (
 var (
 	// ErrNoTipsAvailable is returned when no tips are available in the node.
 	ErrNoTipsAvailable = errors.New("no tips available")
+	// ErrNotEnoughTips is returned when not enough unique tips could be selected.
+	ErrNotEnoughTips = errors.New("not enough tips available")
 )
 
 // Tip defines a tip.
@@ -116,6 +119,8 @@ type TipSelector struct {
 	tipsLock syncutils.Mutex
 	// Events are the events that are triggered by the TipSelector.
 	Events *Events
+	// tipCount is the amount of tips to select.
+	tipCount int
 }
 
 // New creates a new tip-selector.
@@ -129,7 +134,8 @@ func New(
 	maxChildrenNonLazy uint32,
 	retentionRulesTipsLimitSemiLazy int,
 	maxReferencedTipAgeSemiLazy time.Duration,
-	maxChildrenSemiLazy uint32) *TipSelector {
+	maxChildrenSemiLazy uint32,
+	tipCount int) *TipSelector {
 
 	return &TipSelector{
 		shutdownCtx:                     shutdownCtx,
@@ -145,6 +151,7 @@ func New(
 		nonLazyTipsMap:                  make(map[iotago.BlockID]*Tip),
 		semiLazyTipsMap:                 make(map[iotago.BlockID]*Tip),
 		Events:                          newEvents(),
+		tipCount:                        tipCount,
 	}
 }
 
@@ -309,6 +316,9 @@ func (ts *TipSelector) selectTips(tipsMap map[iotago.BlockID]*Tip) (iotago.Block
 
 	tipCount := ts.optimalTipCount()
 	maxRetries := (tipCount - 1) * 10
+	if maxRetries < 1 {
+		maxRetries = 1
+	}
 
 	seen := make(map[iotago.BlockID]struct{})
 	tips := iotago.BlockIDs{}
@@ -339,13 +349,21 @@ func (ts *TipSelector) selectTips(tipsMap map[iotago.BlockID]*Tip) (iotago.Block
 		}
 	}
 
-	return tips.RemoveDupsAndSort(), nil
+	tips = tips.RemoveDupsAndSort()
+	if len(tips) < tipCount {
+		return nil, ErrNotEnoughTips
+	}
+
+	return tips, nil
 }
 
 // optimalTipCount returns the optimal number of tips.
 func (ts *TipSelector) optimalTipCount() int {
-	// hardcoded until next PR
-	return 4
+	if ts.tipCount <= 0 {
+		return 1
+	}
+
+	return ts.tipCount
 }
 
 // TipCount returns the current amount of available tips in the non-lazy and semi-lazy pool.
@@ -353,12 +371,12 @@ func (ts *TipSelector) TipCount() (int, int) {
 	return len(ts.nonLazyTipsMap), len(ts.semiLazyTipsMap)
 }
 
-// SelectSemiLazyTips selects two semi-lazy tips.
+// SelectSemiLazyTips selects multiple semi-lazy tips.
 func (ts *TipSelector) SelectSemiLazyTips() (iotago.BlockIDs, error) {
 	return ts.selectTips(ts.semiLazyTipsMap)
 }
 
-// SelectNonLazyTips selects two non-lazy tips.
+// SelectNonLazyTips selects multiple non-lazy tips.
 func (ts *TipSelector) SelectNonLazyTips() (iotago.BlockIDs, error) {
 	return ts.selectTips(ts.nonLazyTipsMap)
 }
@@ -367,18 +385,19 @@ func (ts *TipSelector) SelectNonLazyTips() (iotago.BlockIDs, error) {
 // but uses non-lazy tips instead if not enough semi-lazy tips are found.
 // This functionality may be useful for healthy spammers.
 func (ts *TipSelector) SelectTipsWithSemiLazyAllowed() (tips iotago.BlockIDs, err error) {
-	if len(ts.semiLazyTipsMap) > 2 {
+	tipCount := ts.optimalTipCount()
+	if len(ts.semiLazyTipsMap) >= tipCount {
 		// return semi-lazy tips (e.g. for healthy spammers)
 		tips, err = ts.SelectSemiLazyTips()
-		if err != nil {
+		if err != nil && !stdErrors.Is(err, ErrNotEnoughTips) && !stdErrors.Is(err, ErrNoTipsAvailable) {
 			return nil, fmt.Errorf("couldn't select semi-lazy tips: %w", err)
 		}
 
-		if len(tips) >= 2 {
+		if len(tips) >= tipCount {
 			return tips, nil
 		}
 
-		// if the amount of tips is less than 2, creating a block with a single parent would
+		// if the amount of tips is less than tipCount, creating a block with a single parent would
 		// not reduce the semi-lazy count. Therefore we ignore the semi-lazy tips, and return
 		// not-lazy tips instead.
 	}

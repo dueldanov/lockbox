@@ -7,9 +7,6 @@ import (
 
 	"go.uber.org/dig"
 
-	"github.com/iotaledger/hive.go/app"
-	"github.com/iotaledger/hive.go/app/shutdown"
-	"github.com/iotaledger/hive.go/lo"
 	"github.com/dueldanov/lockbox/v2/pkg/common"
 	"github.com/dueldanov/lockbox/v2/pkg/components"
 	"github.com/dueldanov/lockbox/v2/pkg/daemon"
@@ -18,6 +15,9 @@ import (
 	"github.com/dueldanov/lockbox/v2/pkg/model/syncmanager"
 	"github.com/dueldanov/lockbox/v2/pkg/tangle"
 	"github.com/dueldanov/lockbox/v2/pkg/tipselect"
+	"github.com/iotaledger/hive.go/app"
+	"github.com/iotaledger/hive.go/app/shutdown"
+	"github.com/iotaledger/hive.go/lo"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 
@@ -55,6 +55,7 @@ func provide(c *dig.Container) error {
 		TipScoreCalculator *tangle.TipScoreCalculator
 		SyncManager        *syncmanager.SyncManager
 		ServerMetrics      *metrics.ServerMetrics
+		MinPreviousRefs    int `name:"dagMinPreviousRefs"`
 	}
 
 	if err := c.Provide(func(deps tipselDeps) *tipselect.TipSelector {
@@ -71,6 +72,7 @@ func provide(c *dig.Container) error {
 			ParamsTipsel.SemiLazy.RetentionRulesTipsLimit,
 			ParamsTipsel.SemiLazy.MaxReferencedTipAge,
 			ParamsTipsel.SemiLazy.MaxChildren,
+			deps.MinPreviousRefs,
 		)
 	}); err != nil {
 		Component.LogPanic(err)

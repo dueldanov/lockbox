@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/dueldanov/lockbox/v2/pkg/common"
+	"github.com/dueldanov/lockbox/v2/pkg/model/utxo"
+	"github.com/dueldanov/lockbox/v2/pkg/profile"
 	"github.com/iotaledger/hive.go/kvstore"
 	"github.com/iotaledger/hive.go/objectstorage"
 	"github.com/iotaledger/hive.go/runtime/event"
 	"github.com/iotaledger/hive.go/runtime/syncutils"
-	"github.com/dueldanov/lockbox/v2/pkg/common"
-	"github.com/dueldanov/lockbox/v2/pkg/model/utxo"
-	"github.com/dueldanov/lockbox/v2/pkg/profile"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 
@@ -102,6 +102,7 @@ type Storage struct {
 	milestoneIndexStorage     *objectstorage.ObjectStorage
 	milestoneStorage          *objectstorage.ObjectStorage
 	unreferencedBlocksStorage *objectstorage.ObjectStorage
+	approvalStateStorage      *objectstorage.ObjectStorage
 
 	// solid entry points
 	solidEntryPoints     *SolidEntryPoints
@@ -382,6 +383,10 @@ func (s *Storage) configureStorages(tangleStore kvstore.KVStore, cachesProfile .
 		return err
 	}
 
+	if err := s.configureApprovalStateStorage(tangleStore, cachesOpts.Children); err != nil {
+		return err
+	}
+
 	if err := s.configureMilestoneStorage(tangleStore, cachesOpts.Milestones); err != nil {
 		return err
 	}
@@ -434,6 +439,7 @@ func (s *Storage) FlushStorages() {
 	s.FlushMilestoneStorage()
 	s.FlushBlocksStorage()
 	s.FlushChildrenStorage()
+	s.FlushApprovalStateStorage()
 	s.FlushUnreferencedBlocksStorage()
 }
 
@@ -442,6 +448,7 @@ func (s *Storage) ShutdownStorages() {
 	s.ShutdownMilestoneStorage()
 	s.ShutdownBlocksStorage()
 	s.ShutdownChildrenStorage()
+	s.ShutdownApprovalStateStorage()
 	s.ShutdownUnreferencedBlocksStorage()
 }
 

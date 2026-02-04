@@ -9,9 +9,6 @@ import (
 	flag "github.com/spf13/pflag"
 	"go.uber.org/dig"
 
-	"github.com/iotaledger/hive.go/app"
-	"github.com/iotaledger/hive.go/lo"
-	"github.com/iotaledger/hive.go/runtime/timeutil"
 	"github.com/dueldanov/lockbox/v2/pkg/common"
 	"github.com/dueldanov/lockbox/v2/pkg/components"
 	"github.com/dueldanov/lockbox/v2/pkg/daemon"
@@ -25,6 +22,9 @@ import (
 	"github.com/dueldanov/lockbox/v2/pkg/pruning"
 	"github.com/dueldanov/lockbox/v2/pkg/snapshot"
 	"github.com/dueldanov/lockbox/v2/pkg/tangle"
+	"github.com/iotaledger/hive.go/app"
+	"github.com/iotaledger/hive.go/lo"
+	"github.com/iotaledger/hive.go/runtime/timeutil"
 	iotago "github.com/iotaledger/iota.go/v3"
 	"github.com/iotaledger/iota.go/v3/keymanager"
 )
@@ -106,12 +106,23 @@ func provide(c *dig.Container) error {
 		dig.Out
 		MaxDeltaBlockYoungestConeRootIndexToCMI int `name:"maxDeltaBlockYoungestConeRootIndexToCMI"`
 		MaxDeltaBlockOldestConeRootIndexToCMI   int `name:"maxDeltaBlockOldestConeRootIndexToCMI"`
+		MinPreviousRefs                         int `name:"dagMinPreviousRefs"`
+		MinFutureApprovals                      int `name:"dagMinFutureApprovals"`
 	}
 
 	if err := c.Provide(func() cfgResult {
+		if ParamsDAG.MinPreviousRefs <= 0 {
+			Component.LogPanicf("dag.min_previous_refs must be > 0, got %d", ParamsDAG.MinPreviousRefs)
+		}
+		if ParamsDAG.MinFutureApprovals <= 0 {
+			Component.LogPanicf("dag.min_future_approvals must be > 0, got %d", ParamsDAG.MinFutureApprovals)
+		}
+
 		return cfgResult{
 			MaxDeltaBlockYoungestConeRootIndexToCMI: ParamsTangle.MaxDeltaBlockYoungestConeRootIndexToCMI,
 			MaxDeltaBlockOldestConeRootIndexToCMI:   ParamsTangle.MaxDeltaBlockOldestConeRootIndexToCMI,
+			MinPreviousRefs:                         ParamsDAG.MinPreviousRefs,
+			MinFutureApprovals:                      ParamsDAG.MinFutureApprovals,
 		}
 	}); err != nil {
 		Component.LogPanic(err)
@@ -162,6 +173,8 @@ func provide(c *dig.Container) error {
 			deps.ProtocolManager,
 			ParamsTangle.MilestoneTimeout,
 			ParamsTangle.WhiteFlagParentsSolidTimeout,
+			ParamsDAG.MinPreviousRefs,
+			ParamsDAG.MinFutureApprovals,
 			*syncedAtStartup)
 	}); err != nil {
 		Component.LogPanic(err)

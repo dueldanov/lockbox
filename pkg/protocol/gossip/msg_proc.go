@@ -8,11 +8,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/pkg/errors"
 
-	"github.com/iotaledger/hive.go/objectstorage"
-	"github.com/iotaledger/hive.go/runtime/event"
-	"github.com/iotaledger/hive.go/runtime/syncutils"
-	"github.com/iotaledger/hive.go/runtime/workerpool"
-	"github.com/iotaledger/hive.go/serializer/v2"
 	"github.com/dueldanov/lockbox/v2/pkg/dag"
 	"github.com/dueldanov/lockbox/v2/pkg/metrics"
 	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
@@ -21,6 +16,11 @@ import (
 	"github.com/dueldanov/lockbox/v2/pkg/profile"
 	"github.com/dueldanov/lockbox/v2/pkg/protocol"
 	"github.com/dueldanov/lockbox/v2/pkg/protocol/protocol/message"
+	"github.com/iotaledger/hive.go/objectstorage"
+	"github.com/iotaledger/hive.go/runtime/event"
+	"github.com/iotaledger/hive.go/runtime/syncutils"
+	"github.com/iotaledger/hive.go/runtime/workerpool"
+	"github.com/iotaledger/hive.go/serializer/v2"
 	iotago "github.com/iotaledger/iota.go/v3"
 	"github.com/iotaledger/iota.go/v3/builder"
 	"github.com/iotaledger/iota.go/v3/pow"
@@ -54,6 +54,7 @@ type MessageProcessorEvents struct {
 // The Options for the MessageProcessor.
 type Options struct {
 	WorkUnitCacheOpts *profile.CacheOpts
+	MinPreviousRefs   int
 }
 
 // MessageProcessor processes submitted messages in parallel and fires appropriate completion events.
@@ -72,6 +73,8 @@ type MessageProcessor struct {
 	protocolManager *protocol.Manager
 	// holds the message processor options.
 	opts Options
+	// minimum amount of previous references required per block.
+	minPreviousRefs int
 
 	// events of the block processor.
 	Events *MessageProcessorEvents
@@ -105,6 +108,7 @@ func NewMessageProcessor(
 		protocolManager: protocolManager,
 		wp:              workerpool.New("MessageProcessor", WorkerCount),
 		opts:            *opts,
+		minPreviousRefs: opts.MinPreviousRefs,
 		Events: &MessageProcessorEvents{
 			BlockProcessed: event.New3[*storage.Block, Requests, *Protocol](),
 			BroadcastBlock: event.New1[*Broadcast](),
@@ -186,6 +190,10 @@ func (proc *MessageProcessor) Emit(block *storage.Block) error {
 		return fmt.Errorf("block has invalid protocol version %d instead of %d", block.ProtocolVersion(), proc.protocolManager.Current().Version)
 	}
 
+	if err := proc.validateParents(block); err != nil {
+		return err
+	}
+
 	switch block.Block().Payload.(type) {
 
 	case *iotago.Milestone:
@@ -258,6 +266,17 @@ func (proc *MessageProcessor) Emit(block *storage.Block) error {
 	proc.Events.BroadcastBlock.Trigger(&Broadcast{Data: block.Data()})
 
 	return nil
+}
+
+func (proc *MessageProcessor) validateParents(block *storage.Block) error {
+	if proc.minPreviousRefs <= 0 {
+		return nil
+	}
+	if block.IsMilestone() {
+		return nil
+	}
+
+	return dag.ValidateParents(block.Parents(), proc.minPreviousRefs)
 }
 
 // WorkUnitsSize returns the size of WorkUnits currently cached.
@@ -468,6 +487,13 @@ func (proc *MessageProcessor) processWorkUnit(wu *WorkUnit, p *Protocol) {
 	}
 
 	isMilestonePayload := block.IsMilestone()
+
+	if err := proc.validateParents(block); err != nil {
+		wu.UpdateState(Invalid)
+		wu.punish(errors.WithMessage(err, "peer sent a block with invalid parents"))
+
+		return
+	}
 
 	// mark the block as received
 	requests := processRequests(wu, block, isMilestonePayload)

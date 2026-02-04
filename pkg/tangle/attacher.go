@@ -7,10 +7,11 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/iotaledger/hive.go/serializer/v2"
+	"github.com/dueldanov/lockbox/v2/pkg/dag"
 	"github.com/dueldanov/lockbox/v2/pkg/metrics"
 	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
 	"github.com/dueldanov/lockbox/v2/pkg/pow"
+	"github.com/iotaledger/hive.go/serializer/v2"
 	inxpow "github.com/iotaledger/inx-app/pkg/pow"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
@@ -120,6 +121,10 @@ func (a *BlockAttacher) AttachBlock(ctx context.Context, iotaBlock *iotago.Block
 		iotaBlock.Parents = tips
 	}
 
+	if err := a.validateParents(iotaBlock); err != nil {
+		return iotago.EmptyBlockID(), errors.WithMessage(ErrBlockAttacherInvalidBlock, err.Error())
+	}
+
 	switch iotaBlock.Payload.(type) {
 
 	case *iotago.Milestone:
@@ -186,4 +191,18 @@ func (a *BlockAttacher) AttachBlock(ctx context.Context, iotaBlock *iotago.Block
 	_ = listener.Wait(ctxBlockProcessed)
 
 	return block.BlockID(), nil
+}
+
+func (a *BlockAttacher) validateParents(iotaBlock *iotago.Block) error {
+	if iotaBlock == nil {
+		return errors.New("block is nil")
+	}
+	if _, isMilestone := iotaBlock.Payload.(*iotago.Milestone); isMilestone {
+		return nil
+	}
+	if a.tangle == nil || a.tangle.minPreviousRefs <= 0 {
+		return nil
+	}
+
+	return dag.ValidateParents(iotaBlock.Parents, a.tangle.minPreviousRefs)
 }

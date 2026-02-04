@@ -46,4 +46,10 @@ type ServerMetrics struct {
 	TipsNonLazy atomic.Uint32
 	// The number of semi-lazy tips.
 	TipsSemiLazy atomic.Uint32
+	// The number of DAG approvals processed.
+	DAGApprovalsAdded atomic.Uint32
+	// The number of blocks confirmed by DAG approvals.
+	DAGApprovalsConfirmed atomic.Uint32
+	// The last DAG approval latency in nanoseconds.
+	DAGApprovalLatencyNanos atomic.Uint64
 }

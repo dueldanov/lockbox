@@ -134,6 +134,10 @@
     "discardOlderThan": "15s",
     "pendingReEnqueueInterval": "5s"
   },
+  "dag": {
+    "min_previous_refs": 3,
+    "min_future_approvals": 3
+  },
   "tangle": {
     "milestoneTimeout": "30s",
     "maxDeltaBlockYoungestConeRootIndexToCMI": 8,

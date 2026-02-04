@@ -8,12 +8,6 @@ import (
 
 	"go.uber.org/atomic"
 
-	"github.com/iotaledger/hive.go/app/daemon"
-	"github.com/iotaledger/hive.go/logger"
-	"github.com/iotaledger/hive.go/runtime/syncutils"
-	"github.com/iotaledger/hive.go/runtime/timeutil"
-	"github.com/iotaledger/hive.go/runtime/valuenotifier"
-	"github.com/iotaledger/hive.go/runtime/workerpool"
 	"github.com/dueldanov/lockbox/v2/pkg/metrics"
 	"github.com/dueldanov/lockbox/v2/pkg/model/migrator"
 	"github.com/dueldanov/lockbox/v2/pkg/model/milestonemanager"
@@ -21,6 +15,12 @@ import (
 	"github.com/dueldanov/lockbox/v2/pkg/model/syncmanager"
 	"github.com/dueldanov/lockbox/v2/pkg/protocol"
 	"github.com/dueldanov/lockbox/v2/pkg/protocol/gossip"
+	"github.com/iotaledger/hive.go/app/daemon"
+	"github.com/iotaledger/hive.go/logger"
+	"github.com/iotaledger/hive.go/runtime/syncutils"
+	"github.com/iotaledger/hive.go/runtime/timeutil"
+	"github.com/iotaledger/hive.go/runtime/valuenotifier"
+	"github.com/iotaledger/hive.go/runtime/workerpool"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 
@@ -55,6 +55,8 @@ type Tangle struct {
 
 	milestoneTimeout             time.Duration
 	whiteFlagParentsSolidTimeout time.Duration
+	minPreviousRefs              int
+	minFutureApprovals           int
 	updateSyncedAtStartup        bool
 
 	milestoneTimeoutTicker *timeutil.Ticker
@@ -125,6 +127,8 @@ func New(
 	protocolManager *protocol.Manager,
 	milestoneTimeout time.Duration,
 	whiteFlagParentsSolidTimeout time.Duration,
+	minPreviousRefs int,
+	minFutureApprovals int,
 	updateSyncedAtStartup bool) *Tangle {
 
 	t := &Tangle{
@@ -143,6 +147,8 @@ func New(
 		protocolManager:              protocolManager,
 		milestoneTimeout:             milestoneTimeout,
 		whiteFlagParentsSolidTimeout: whiteFlagParentsSolidTimeout,
+		minPreviousRefs:              minPreviousRefs,
+		minFutureApprovals:           minFutureApprovals,
 		updateSyncedAtStartup:        updateSyncedAtStartup,
 
 		milestoneTimeoutTicker:           nil,

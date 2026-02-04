@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/dueldanov/lockbox/v2/pkg/common"
+	"github.com/dueldanov/lockbox/v2/pkg/daemon"
+	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol/gossip"
 	"github.com/iotaledger/hive.go/lo"
 	"github.com/iotaledger/hive.go/runtime/contextutils"
 	"github.com/iotaledger/hive.go/runtime/event"
 	"github.com/iotaledger/hive.go/runtime/timeutil"
 	"github.com/iotaledger/hive.go/runtime/valuenotifier"
 	"github.com/iotaledger/hive.go/runtime/workerpool"
-	"github.com/dueldanov/lockbox/v2/pkg/common"
-	"github.com/dueldanov/lockbox/v2/pkg/daemon"
-	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
-	"github.com/dueldanov/lockbox/v2/pkg/protocol/gossip"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 
@@ -188,6 +188,8 @@ func (t *Tangle) processIncomingTx(incomingBlock *storage.Block, requests gossip
 		if proto != nil {
 			proto.Metrics.NewBlocks.Inc()
 		}
+
+		t.updateApprovalsForBlock(cachedBlock)
 
 		hadRequests := false
 

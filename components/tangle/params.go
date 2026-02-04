@@ -22,9 +22,20 @@ type ParametersTangle struct {
 
 var ParamsTangle = &ParametersTangle{}
 
+// ParametersDAG contains the definition of the parameters used by DAG rules.
+type ParametersDAG struct {
+	// MinPreviousRefs defines the required amount of previous references per block.
+	MinPreviousRefs int `default:"3" usage:"minimum amount of previous references required per block" koanf:"min_previous_refs"`
+	// MinFutureApprovals defines the required amount of future approvals to confirm a block.
+	MinFutureApprovals int `default:"3" usage:"minimum amount of future approvals required to confirm a block" koanf:"min_future_approvals"`
+}
+
+var ParamsDAG = &ParametersDAG{}
+
 var params = &app.ComponentParams{
 	Params: map[string]any{
 		"tangle": ParamsTangle,
+		"dag":    ParamsDAG,
 	},
 	Masked: nil,
 }

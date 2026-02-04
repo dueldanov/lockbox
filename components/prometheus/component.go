@@ -16,7 +16,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/dig"
 
-	"github.com/iotaledger/hive.go/app"
 	coreDatabase "github.com/dueldanov/lockbox/v2/components/database"
 	"github.com/dueldanov/lockbox/v2/components/inx"
 	"github.com/dueldanov/lockbox/v2/pkg/components"
@@ -32,6 +31,7 @@ import (
 	"github.com/dueldanov/lockbox/v2/pkg/snapshot"
 	"github.com/dueldanov/lockbox/v2/pkg/tangle"
 	"github.com/dueldanov/lockbox/v2/pkg/tipselect"
+	"github.com/iotaledger/hive.go/app"
 )
 
 // routeMetrics is the route for getting the prometheus metrics.
@@ -122,6 +122,7 @@ func configure() error {
 	if ParamsPrometheus.GossipMetrics {
 		configureGossipPeers()
 		configureGossipNode()
+		configureDAG()
 	}
 	if ParamsPrometheus.CachesMetrics {
 		configureCaches()

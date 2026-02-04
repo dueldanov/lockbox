@@ -11,5 +11,6 @@ const (
 	StorePrefixProtocol           byte = 8
 	StorePrefixShards             byte = 9  // Added for shard storage
 	StorePrefixShardDistribution  byte = 10 // Added for shard distribution
+	StorePrefixApprovals          byte = 11 // Added for DAG approvals
 	StorePrefixHealth             byte = 255
 )
