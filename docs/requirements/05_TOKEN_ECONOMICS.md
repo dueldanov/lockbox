@@ -258,5 +258,5 @@ type UsernameEntry struct {
 #### 6.3.3 Registration Rules
 
 - First-come-first-serve basis for unique usernames
-- Requires at least three future node approvals
+- Requires at least three future node approvals (for all transactions)
 - Conflicts resolved by timestamp priority

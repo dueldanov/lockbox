@@ -134,7 +134,7 @@ This document lists all 126 functions executed during the rotateKey (rotate_and_
 | 72 | `submit_to_dag()` | Submits new shards to DAG | Submission started |
 | 73 | `iota.NewMessageBuilder()` | Creates message builder per shard | Builder initialized |
 | 74 | `iota.WithPayload()` | Attaches encrypted payload | Payload size |
-| 75 | `iota.WithReferences()` | Sets 2 prior transaction references | References set |
+| 75 | `iota.WithReferences()` | Sets 3 prior transaction references | References set |
 | 76 | `iota.SubmitMessage()` | Submits message to DAG | Message ID |
 | 77 | `collect_new_tx_ids()` | Collects new transaction IDs | TX IDs collected |
 | 78 | `http.NewRequest()` | Creates HTTP request per node | Request created |

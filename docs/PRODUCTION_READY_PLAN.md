@@ -13,10 +13,10 @@
   - `MinFutureApprovals = 3`
 - **ApprovalState**:
   - `ApprovalCount`
-  - `Approvers []Hash`
   - `ConfirmedAt *int64`
+  - `Approvers` выводятся из reverse-index (children storage)
 - **ApprovalIndex (reverse-index)**:
-  - `map[ApprovedTxID][]ApproverTxID`
+  - `children storage` (parent -> children)
 - **Config**:
   - `dag.min_previous_refs`
   - `dag.min_future_approvals`
@@ -106,7 +106,8 @@
 - Подпись не включает 3-й ref → reject.
 
 **Реализация:**
-- Подпись включает все 3 references.
+- TransactionEssence.Payload содержит `TaggedData` с tag `lockbox.parents.v1`,
+  data = hash от 3 parents (это подписывается вместе с essence).
 
 **Проверка:**
 - Подпись валидируется.
@@ -189,4 +190,3 @@
 ## Допущения
 - Реализация идёт через существующий consensus слой (без нового DAG gRPC API).
 - Если tip selection отсутствует — реализуется минимальная версия, достаточная для 3+3.
-

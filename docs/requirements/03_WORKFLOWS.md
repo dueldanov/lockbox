@@ -273,7 +273,7 @@
 2. **Initial DAG Formation:**
    - Genesis nodes establish transaction structure with cross-references
    - Each submits initial transactions referencing others
-   - Required approvals (2 prior) established within genesis group
+   - Required approvals (3 prior) established within genesis group
    - Network parameters set in these transactions
 
 3. **Node Expansion:**

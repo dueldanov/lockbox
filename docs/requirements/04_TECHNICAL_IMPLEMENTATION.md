@@ -8,7 +8,7 @@
 
 | File | Modifications |
 |------|--------------|
-| `tangle.go` | ZKP validation plugin, two-prior-approval enforcement |
+| `tangle.go` | ZKP validation plugin, three-prior-approval enforcement |
 | `database.go` | Metadata sharding and distribution |
 | `ledger.go` | LedgerTx for LockBox token transactions |
 | `node.go/peering.go` | Node authentication, geographic verification |

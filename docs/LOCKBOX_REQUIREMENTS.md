@@ -910,7 +910,7 @@ The Elite tier delivers maximum security with enterprise-grade features and hard
 
     -   Each submits initial transactions referencing others
 
-    -   Required approvals (2 prior) established within genesis group
+    -   Required approvals (3 prior) established within genesis group
 
     -   Network parameters set in these transactions
 
@@ -1074,7 +1074,7 @@ The LockBox system shall implement a structured three-phase approach for token d
 
 **5.1.1 Base Code Modifications (from IOTA Hornet v2.0.2)**
 
--   **tangle.go:** ZKP validation plugin, two-prior-approval enforcement
+-   **tangle.go:** ZKP validation plugin, three-prior-approval enforcement
 
 -   **database.go:** Metadata sharding and distribution
 
@@ -1888,7 +1888,7 @@ program_2_commission_rate: Float (default: 0.10)
 
 -   First-come-first-serve basis for unique usernames
 
--   Requires at least three future node approvals
+-   Requires at least three future node approvals (for all transactions)
 
 -   Conflicts resolved by timestamp priority
 
