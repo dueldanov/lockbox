@@ -10,8 +10,8 @@ import (
 
 	"github.com/docker/go-connections/nat"
 
-	"github.com/iotaledger/hive.go/crypto"
 	"github.com/dueldanov/lockbox/v2/components/protocfg"
+	"github.com/iotaledger/hive.go/crypto"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 
@@ -73,6 +73,7 @@ func DefaultConfig() *AppConfig {
 		Network:     DefaultNetworkConfig(),
 		Snapshot:    DefaultSnapshotConfig(),
 		Protocol:    DefaultProtocolConfig(),
+		DAG:         DefaultDAGConfig(),
 		RestAPI:     DefaultRestAPIConfig(),
 		INX:         DefaultINXConfig(),
 		Profiling:   DefaultProfilingConfig(),
@@ -213,6 +214,8 @@ type AppConfig struct {
 	Snapshot SnapshotConfig
 	// Protocol config.
 	Protocol ProtocolConfig
+	// DAG config.
+	DAG DAGConfig
 	// Profiling config.
 	Profiling ProfilingConfig
 	// Receipts config
@@ -242,6 +245,7 @@ func (cfg *AppConfig) CLIFlags() []string {
 	cliFlags = append(cliFlags, cfg.Network.CLIFlags()...)
 	cliFlags = append(cliFlags, cfg.Snapshot.CLIFlags()...)
 	cliFlags = append(cliFlags, cfg.Protocol.CLIFlags()...)
+	cliFlags = append(cliFlags, cfg.DAG.CLIFlags()...)
 	cliFlags = append(cliFlags, cfg.RestAPI.CLIFlags()...)
 	cliFlags = append(cliFlags, cfg.INX.CLIFlags()...)
 	cliFlags = append(cliFlags, cfg.Profiling.CLIFlags()...)
@@ -357,6 +361,8 @@ type RestAPIConfig struct {
 	ProtectedRoutes []string
 	// Whether the node does proof-of-work for submitted blocks.
 	PoWEnabled bool
+	// Whether to enable REST API rate limiting.
+	RateLimitingEnabled bool
 }
 
 // CLIFlags returns the config as CLI flags.
@@ -366,6 +372,7 @@ func (restAPIConfig *RestAPIConfig) CLIFlags() []string {
 		fmt.Sprintf("--%s=%s", "restAPI.publicRoutes", strings.Join(restAPIConfig.PublicRoutes, ",")),
 		fmt.Sprintf("--%s=%s", "restAPI.protectedRoutes", strings.Join(restAPIConfig.ProtectedRoutes, ",")),
 		fmt.Sprintf("--%s=%v", "restAPI.pow.enabled", restAPIConfig.PoWEnabled),
+		fmt.Sprintf("--%s=%v", "restAPI.rateLimiting.enabled", restAPIConfig.RateLimitingEnabled),
 	}
 }
 
@@ -379,6 +386,8 @@ func DefaultRestAPIConfig() RestAPIConfig {
 		},
 		ProtectedRoutes: []string{},
 		PoWEnabled:      true,
+		// Disable rate limiting for integration tests to avoid flakiness.
+		RateLimitingEnabled: false,
 	}
 }
 
@@ -610,6 +619,30 @@ func DefaultProtocolConfig() ProtocolConfig {
 				EndIndex:   0,
 			},
 		},
+	}
+}
+
+// DAGConfig defines DAG specific configuration.
+type DAGConfig struct {
+	// MinPreviousRefs defines the required amount of previous references per block.
+	MinPreviousRefs int
+	// MinFutureApprovals defines the required amount of future approvals to confirm a block.
+	MinFutureApprovals int
+}
+
+// CLIFlags returns the config as CLI flags.
+func (dagConfig *DAGConfig) CLIFlags() []string {
+	return []string{
+		fmt.Sprintf("--%s=%d", "dag.min_previous_refs", dagConfig.MinPreviousRefs),
+		fmt.Sprintf("--%s=%d", "dag.min_future_approvals", dagConfig.MinFutureApprovals),
+	}
+}
+
+// DefaultDAGConfig returns the default DAG config.
+func DefaultDAGConfig() DAGConfig {
+	return DAGConfig{
+		MinPreviousRefs:    1,
+		MinFutureApprovals: 1,
 	}
 }
 
