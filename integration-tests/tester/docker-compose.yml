@@ -3,21 +3,21 @@ version: "3.5"
 services:
   tester:
     container_name: tester
-    image: golang:1.21
-    working_dir: /tmp/hornet/integration-tests/tester
+    image: golang:1.24-bullseye
+    working_dir: /tmp/lockbox/integration-tests/tester
     command: /tmp/assets/entrypoint.sh
     environment:
       - TEST_NAME=${TEST_NAME}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ../../:/tmp/hornet:rw
+      - ../../:/tmp/lockbox:rw
       - ../logs:/tmp/logs
       - ../assets:/tmp/assets
-      - hornet-testing-cache:/go
-      - hornet-testing-assets:/assets
+      - lockbox-testing-cache:/go
+      - lockbox-testing-assets:/assets
 
 volumes:
-  hornet-testing-cache:
-    name: hornet-testing-cache
-  hornet-testing-assets:
-    name: hornet-testing-assets
+  lockbox-testing-cache:
+    name: lockbox-testing-cache
+  lockbox-testing-assets:
+    name: lockbox-testing-assets

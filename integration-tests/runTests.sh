@@ -2,16 +2,17 @@
 
 TEST_NAMES='common value migration snapshot autopeering'
 
-echo "Build latest HORNET image"
-docker build -f ../Dockerfile -t hornet:dev ../.
+echo "Build latest LockBox image"
+docker build -f ../Dockerfile -t lockbox:dev ../.
 
 if ! docker image ls | grep -q wfmock
 then
   echo "Pull additional Docker images"
   if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    docker build github.com/iotaledger/chrysalis-tools#:wfmock -t wfmock:latest
+    docker build https://github.com/iotaledger-archive/chrysalis-tools.git#master:wfmock -t wfmock:latest
   elif [[ "$OSTYPE" == "darwin"* ]]; then
-    echo "wfmock:latest needs to be built by hand before running this scripts"
+    echo "wfmock:latest needs to be built by hand before running this scripts:"
+    echo "docker build https://github.com/iotaledger-archive/chrysalis-tools.git#master:wfmock -t wfmock:latest"
     exit 1
   fi
 fi
@@ -26,4 +27,3 @@ for name in $TEST_NAMES; do
   docker logs tester &>logs/"$name"_tester.log
   TEST_NAME=$name docker compose -f tester/docker-compose.yml down
 done
-

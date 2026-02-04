@@ -28,7 +28,7 @@ const (
 
 	autopeeringMaxTries = 50
 
-	containerNodeImage           = "hornet:dev"
+	containerNodeImage           = "lockbox:dev"
 	coordinatorImage             = "iotaledger/inx-coordinator:1.0-rc"
 	indexerImage                 = "iotaledger/inx-indexer:1.0-rc"
 	containerWhiteFlagMockServer = "wfmock:latest"
@@ -66,9 +66,9 @@ func init() {
 func DefaultConfig() *AppConfig {
 	cfg := &AppConfig{
 		Name: "",
-		Envs: []string{"LOGGER_LEVEL=debug"},
+		Envs: []string{"LOGGER_LEVEL=debug", "LOCKBOX_DEV_MODE=true"},
 		Binds: []string{
-			fmt.Sprintf("hornet-testing-assets:%s:rw", assetsDir),
+			fmt.Sprintf("lockbox-testing-assets:%s:rw", assetsDir),
 		},
 		Network:     DefaultNetworkConfig(),
 		Snapshot:    DefaultSnapshotConfig(),
@@ -107,7 +107,7 @@ func DefaultWhiteFlagMockServerConfig(name string, configFileName string) *White
 			fmt.Sprintf("WHITE_FLAG_MOCK_CONFIG=%s/%s", assetsDir, configFileName),
 		},
 		Binds: []string{
-			fmt.Sprintf("hornet-testing-assets:%s:rw", assetsDir),
+			fmt.Sprintf("lockbox-testing-assets:%s:rw", assetsDir),
 		},
 	}
 }
@@ -138,7 +138,7 @@ func DefaultINXCoordinatorConfig() *INXCoordinatorConfig {
 		Name:     "",
 		Envs:     []string{"LOGGER_LEVEL=debug"},
 		Binds: []string{
-			fmt.Sprintf("hornet-testing-assets:%s:rw", assetsDir),
+			fmt.Sprintf("lockbox-testing-assets:%s:rw", assetsDir),
 		},
 		Coordinator: DefaultCoordinatorConfig(),
 		Migrator:    DefaultMigratorConfig(),
@@ -180,7 +180,7 @@ func DefaultINXIndexerConfig() *INXIndexerConfig {
 		Name: "",
 		Envs: []string{"LOGGER_LEVEL=debug"},
 		Binds: []string{
-			fmt.Sprintf("hornet-testing-assets:%s:rw", assetsDir),
+			fmt.Sprintf("lockbox-testing-assets:%s:rw", assetsDir),
 		},
 	}
 }
