@@ -633,8 +633,8 @@ type DAGConfig struct {
 // CLIFlags returns the config as CLI flags.
 func (dagConfig *DAGConfig) CLIFlags() []string {
 	return []string{
-		fmt.Sprintf("--%s=%d", "dag.min_previous_refs", dagConfig.MinPreviousRefs),
-		fmt.Sprintf("--%s=%d", "dag.min_future_approvals", dagConfig.MinFutureApprovals),
+		fmt.Sprintf("--%s=%d", "dag.minPreviousRefs", dagConfig.MinPreviousRefs),
+		fmt.Sprintf("--%s=%d", "dag.minFutureApprovals", dagConfig.MinFutureApprovals),
 	}
 }
 
