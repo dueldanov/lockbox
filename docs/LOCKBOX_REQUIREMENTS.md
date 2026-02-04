@@ -44,7 +44,7 @@ Development will proceed in phases, with initial focus exclusively on Project 1 
 
 -   Operating **without a coordinator** (Coordicide upgrade)
 
--   DAG consensus: Each transaction references and validates at least two previous transactions
+-   DAG consensus: Each transaction references and validates exactly three previous transactions
 
 -   No proof-of-work required
 

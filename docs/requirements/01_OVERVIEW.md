@@ -35,7 +35,7 @@ LockBox is a decentralized solution for secure private key management in cryptoc
 #### Foundation
 - Fork of IOTA Hornet v2.0.2 (May 24, 2024)
 - Operating **without a coordinator** (Coordicide upgrade)
-- DAG consensus: Each transaction references and validates at least two previous transactions
+- DAG consensus: Each transaction references and validates exactly three previous transactions
 - No proof-of-work required
 
 #### Core Features
