@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dueldanov/lockbox/v2/pkg/dag"
 	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
 	"github.com/dueldanov/lockbox/v2/pkg/protocol"
 	"github.com/iotaledger/hive.go/logger"
@@ -113,7 +114,7 @@ func (m *Manager) validateBlockStructure(block *iotago.Block) error {
 func (m *Manager) validateBlockSignatures(block *iotago.Block) error {
 	// Extract and validate signatures from block
 	// This replaces PoW validation
-	return nil
+	return dag.ValidateParentsSignature(block)
 }
 
 func (m *Manager) checkConsensusRules(ctx context.Context, block *iotago.Block) error {

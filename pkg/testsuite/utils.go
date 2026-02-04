@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/dueldanov/lockbox/v2/pkg/dag"
 	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
 	"github.com/dueldanov/lockbox/v2/pkg/model/utxo"
 	"github.com/dueldanov/lockbox/v2/pkg/testsuite/utils"
@@ -242,11 +243,8 @@ func (b *BlockBuilder) BuildTransactionWithInputsAndOutputs(consumedInputs utxo.
 }
 
 func (b *BlockBuilder) buildTransactionWithBuilderAndSigned(txBuilder *builder.TransactionBuilder, consumedInputs utxo.Outputs, signer iotago.AddressSigner) *Block {
-	if len(b.tag) > 0 {
-		txBuilder.AddTaggedDataPayload(&iotago.TaggedData{Tag: []byte(b.tag), Data: b.tagData})
-	}
-
 	require.NotNil(b.te.TestInterface, b.parents)
+	txBuilder.AddTaggedDataPayload(dag.ParentsSignatureTaggedData(b.parents))
 
 	iotaBlock, err := txBuilder.BuildAndSwapToBlockBuilder(b.te.protoParams, signer, nil).
 		Parents(b.parents).

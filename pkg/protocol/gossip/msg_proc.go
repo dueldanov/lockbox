@@ -276,7 +276,11 @@ func (proc *MessageProcessor) validateParents(block *storage.Block) error {
 		return nil
 	}
 
-	return dag.ValidateParents(block.Parents(), proc.minPreviousRefs)
+	if err := dag.ValidateParents(block.Parents(), proc.minPreviousRefs); err != nil {
+		return err
+	}
+
+	return dag.ValidateParentsSignature(block.Block())
 }
 
 // WorkUnitsSize returns the size of WorkUnits currently cached.

@@ -204,5 +204,9 @@ func (a *BlockAttacher) validateParents(iotaBlock *iotago.Block) error {
 		return nil
 	}
 
-	return dag.ValidateParents(iotaBlock.Parents, a.tangle.minPreviousRefs)
+	if err := dag.ValidateParents(iotaBlock.Parents, a.tangle.minPreviousRefs); err != nil {
+		return err
+	}
+
+	return dag.ValidateParentsSignature(iotaBlock)
 }

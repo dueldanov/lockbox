@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dueldanov/lockbox/v2/integration-tests/tester/framework"
+	"github.com/dueldanov/lockbox/v2/pkg/dag"
 	"github.com/dueldanov/lockbox/v2/pkg/tpkg"
 	iotago "github.com/iotaledger/iota.go/v3"
 	"github.com/iotaledger/iota.go/v3/builder"
@@ -32,7 +33,7 @@ func TestValue(t *testing.T) {
 	infoRes, err := n.Coordinator().DebugNodeAPIClient.Info(context.Background())
 	require.NoError(t, err)
 	protoParams := &infoRes.Protocol
-	parent := fetchMilestoneParent(t, n.Coordinator().DebugNodeAPIClient)
+	parents := fetchTipsParents(t, n.Coordinator().DebugNodeAPIClient)
 
 	// create two targets
 	target1 := ed25519.NewKeyFromSeed(tpkg.RandSeed())
@@ -60,6 +61,7 @@ func TestValue(t *testing.T) {
 				},
 			},
 		}).
+		AddTaggedDataPayload(dag.ParentsSignatureTaggedData(parents)).
 		AddOutput(&iotago.BasicOutput{
 			Amount: target1Deposit,
 			Conditions: iotago.UnlockConditions{
@@ -78,10 +80,9 @@ func TestValue(t *testing.T) {
 		}).
 		BuildAndSwapToBlockBuilder(protoParams, iotago.NewInMemoryAddressSigner(genesisAddrKey), nil).
 		ProtocolVersion(protoParams.Version).
+		Parents(parents).
 		Build()
 	require.NoError(t, err)
-
-	block.Parents = iotago.BlockIDs{parent}.RemoveDupsAndSort()
 
 	// broadcast to a node
 	log.Println("submitting transaction ...")
@@ -117,24 +118,27 @@ func TestValue(t *testing.T) {
 	require.True(t, outputMetadata.Spent)
 }
 
-func fetchMilestoneParent(t *testing.T, api *framework.DebugNodeAPIClient) iotago.BlockID {
+func fetchTipsParents(t *testing.T, api *framework.DebugNodeAPIClient) iotago.BlockIDs {
 	t.Helper()
 
-	var milestoneHex string
+	var parents iotago.BlockIDs
 	require.Eventually(t, func() bool {
-		info, err := api.Info(context.Background())
+		tips, err := api.Tips(context.Background())
 		if err != nil {
 			return false
 		}
-		milestoneHex = info.Status.LatestMilestone.MilestoneID
-		if milestoneHex == "" {
-			milestoneHex = info.Status.ConfirmedMilestone.MilestoneID
+		parents, err = tips.Tips()
+		if err != nil {
+			return false
 		}
-		return milestoneHex != ""
+		parents = parents.RemoveDupsAndSort()
+		return len(parents) >= 3
 	}, 30*time.Second, 200*time.Millisecond)
 
-	parent, err := iotago.BlockIDFromHexString(milestoneHex)
-	require.NoError(t, err)
+	if len(parents) > 3 {
+		parents = parents[:3]
+	}
+	require.Len(t, parents, 3)
 
-	return parent
+	return parents
 }

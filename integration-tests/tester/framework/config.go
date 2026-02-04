@@ -641,8 +641,8 @@ func (dagConfig *DAGConfig) CLIFlags() []string {
 // DefaultDAGConfig returns the default DAG config.
 func DefaultDAGConfig() DAGConfig {
 	return DAGConfig{
-		MinPreviousRefs:    1,
-		MinFutureApprovals: 1,
+		MinPreviousRefs:    3,
+		MinFutureApprovals: 3,
 	}
 }
 
