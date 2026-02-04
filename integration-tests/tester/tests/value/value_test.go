@@ -32,6 +32,7 @@ func TestValue(t *testing.T) {
 	infoRes, err := n.Coordinator().DebugNodeAPIClient.Info(context.Background())
 	require.NoError(t, err)
 	protoParams := &infoRes.Protocol
+	parent := fetchMilestoneParent(t, n.Coordinator().DebugNodeAPIClient)
 
 	// create two targets
 	target1 := ed25519.NewKeyFromSeed(tpkg.RandSeed())
@@ -80,6 +81,8 @@ func TestValue(t *testing.T) {
 		Build()
 	require.NoError(t, err)
 
+	block.Parents = iotago.BlockIDs{parent}.RemoveDupsAndSort()
+
 	// broadcast to a node
 	log.Println("submitting transaction ...")
 	submittedBlockID, err := n.Nodes[2].DebugNodeAPIClient.SubmitBlock(context.Background(), block, protoParams)
@@ -112,4 +115,26 @@ func TestValue(t *testing.T) {
 	outputMetadata, err := n.Coordinator().DebugNodeAPIClient.OutputMetadataByID(context.Background(), genesisInputID.ID())
 	require.NoError(t, err)
 	require.True(t, outputMetadata.Spent)
+}
+
+func fetchMilestoneParent(t *testing.T, api *framework.DebugNodeAPIClient) iotago.BlockID {
+	t.Helper()
+
+	var milestoneHex string
+	require.Eventually(t, func() bool {
+		info, err := api.Info(context.Background())
+		if err != nil {
+			return false
+		}
+		milestoneHex = info.Status.LatestMilestone.MilestoneID
+		if milestoneHex == "" {
+			milestoneHex = info.Status.ConfirmedMilestone.MilestoneID
+		}
+		return milestoneHex != ""
+	}, 30*time.Second, 200*time.Millisecond)
+
+	parent, err := iotago.BlockIDFromHexString(milestoneHex)
+	require.NoError(t, err)
+
+	return parent
 }

@@ -254,8 +254,20 @@ func (n *Network) CreateIndexer(cfg *INXIndexerConfig) (*INXExtension, error) {
 
 // newNetwork returns a AutopeeredNetwork instance, creates its underlying Docker network and adds the tester container to the network.
 func newNetwork(dockerClient *client.Client, name string, netType NetworkType, tester *DockerContainer) (*Network, error) {
+	ctx := context.Background()
+	if existing, err := dockerClient.NetworkInspect(ctx, name, types.NetworkInspectOptions{}); err == nil {
+		if len(existing.Containers) > 0 {
+			return nil, fmt.Errorf("docker network %s already exists with %d containers", name, len(existing.Containers))
+		}
+		if err := dockerClient.NetworkRemove(ctx, existing.ID); err != nil {
+			return nil, err
+		}
+	} else if !client.IsErrNotFound(err) {
+		return nil, err
+	}
+
 	// create Docker network
-	resp, err := dockerClient.NetworkCreate(context.Background(), name, types.NetworkCreate{})
+	resp, err := dockerClient.NetworkCreate(ctx, name, types.NetworkCreate{})
 	if err != nil {
 		return nil, err
 	}
