@@ -114,7 +114,16 @@ func (d *DockerContainer) CreateContainer(name string, containerConfig *containe
 		hostConfig = hostConfigs[0]
 	}
 
-	resp, err := d.client.ContainerCreate(context.Background(), containerConfig, hostConfig, nil, nil, name)
+	ctx := context.Background()
+	if existing, err := d.client.ContainerInspect(ctx, name); err == nil {
+		if err := d.client.ContainerRemove(ctx, existing.ID, types.ContainerRemoveOptions{Force: true}); err != nil {
+			return err
+		}
+	} else if !client.IsErrNotFound(err) {
+		return err
+	}
+
+	resp, err := d.client.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, name)
 	if err != nil {
 		return err
 	}
