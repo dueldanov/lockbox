@@ -7,10 +7,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotaledger/hive.go/serializer/v2"
 	"github.com/dueldanov/lockbox/v2/pkg/dag"
 	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
 	"github.com/dueldanov/lockbox/v2/pkg/whiteflag"
+	"github.com/iotaledger/hive.go/serializer/v2"
 	iotago "github.com/iotaledger/iota.go/v3"
 	"github.com/iotaledger/iota.go/v3/builder"
 	"github.com/iotaledger/iota.go/v3/keymanager"
@@ -74,8 +74,8 @@ func (coo *MockCoo) LastMilestoneBlockID() iotago.BlockID {
 func (coo *MockCoo) LastMilestoneParents() iotago.BlockIDs {
 	lastMilestonePayload := coo.LastMilestonePayload()
 	if lastMilestonePayload == nil {
-		// return genesis hash
-		return iotago.BlockIDs{iotago.EmptyBlockID()}
+		// return genesis parents
+		return coo.te.GenesisParents()
 	}
 
 	return lastMilestonePayload.Parents
@@ -182,6 +182,8 @@ func (coo *MockCoo) issueMilestoneOnTips(tips iotago.BlockIDs, addLastMilestoneA
 		tips = append(tips, coo.LastMilestoneBlockID())
 	}
 
+	tips = coo.normalizeParents(tips)
+
 	milestonePayload, err := coo.milestonePayload(tips)
 	if err != nil {
 		return nil, iotago.EmptyBlockID(), err
@@ -208,4 +210,41 @@ func (coo *MockCoo) issueMilestoneOnTips(tips iotago.BlockIDs, addLastMilestoneA
 	coo.lastMilestonePayload = cachedMilestone.Milestone().Milestone()
 
 	return cachedMilestone.Milestone(), milestoneBlockID, nil
+}
+
+func (coo *MockCoo) normalizeParents(parents iotago.BlockIDs) iotago.BlockIDs {
+	target := len(coo.te.GenesisParents())
+	if target <= 0 {
+		return parents.RemoveDupsAndSort()
+	}
+
+	result := make(iotago.BlockIDs, 0, target)
+	seen := make(map[iotago.BlockID]struct{}, target)
+
+	add := func(id iotago.BlockID) {
+		if len(result) >= target {
+			return
+		}
+		if _, exists := seen[id]; exists {
+			return
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+
+	for _, parent := range parents {
+		add(parent)
+	}
+	if len(result) < target {
+		for _, parent := range coo.LastMilestoneParents() {
+			add(parent)
+		}
+	}
+	if len(result) < target {
+		for _, parent := range coo.te.GenesisParents() {
+			add(parent)
+		}
+	}
+
+	return result.RemoveDupsAndSort()
 }

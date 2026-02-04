@@ -8,11 +8,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotaledger/hive.go/serializer/v2"
 	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
 	"github.com/dueldanov/lockbox/v2/pkg/model/utxo"
 	"github.com/dueldanov/lockbox/v2/pkg/testsuite/utils"
 	"github.com/dueldanov/lockbox/v2/pkg/tpkg"
+	"github.com/iotaledger/hive.go/serializer/v2"
 	iotago "github.com/iotaledger/iota.go/v3"
 	"github.com/iotaledger/iota.go/v3/builder"
 )
@@ -57,7 +57,7 @@ func (te *TestEnvironment) NewBlockBuilder(optionalTag ...string) *BlockBuilder 
 }
 
 func (b *BlockBuilder) LatestMilestoneAsParents() *BlockBuilder {
-	return b.Parents(iotago.BlockIDs{b.te.coo.lastMilestoneBlockID})
+	return b.Parents(b.te.LastMilestoneParents())
 }
 
 func (b *BlockBuilder) Parents(parents iotago.BlockIDs) *BlockBuilder {

@@ -30,6 +30,41 @@ var (
 	seed4, _ = hex.DecodeString("bd6fe09d8a309ca309c5db7b63513240490109cd0ac6b123551e9da0d5c8916c4a5a4f817e4b4e9df89885ce1af0986da9f1e56b65153c2af1e87ab3b11dabb4")
 )
 
+func parentsWith(te *testsuite.TestEnvironment, extras ...iotago.BlockID) iotago.BlockIDs {
+	target := len(te.GenesisParents())
+	if target <= 0 {
+		return iotago.BlockIDs(extras).RemoveDupsAndSort()
+	}
+
+	parents := make(iotago.BlockIDs, 0, target)
+	seen := make(map[iotago.BlockID]struct{}, target)
+
+	add := func(id iotago.BlockID) {
+		if len(parents) >= target {
+			return
+		}
+		if _, exists := seen[id]; exists {
+			return
+		}
+		seen[id] = struct{}{}
+		parents = append(parents, id)
+	}
+
+	for _, id := range extras {
+		add(id)
+	}
+	for _, id := range te.LastMilestoneParents() {
+		add(id)
+	}
+	if len(parents) < target {
+		for _, id := range te.GenesisParents() {
+			add(id)
+		}
+	}
+
+	return parents.RemoveDupsAndSort()
+}
+
 func TestWhiteFlagSendAllCoins(t *testing.T) {
 
 	seed1Wallet := utils.NewHDWallet("Seed1", seed1, 0)
@@ -72,7 +107,7 @@ func TestWhiteFlagSendAllCoins(t *testing.T) {
 
 	// Issue some transactions
 	blockB := te.NewBlockBuilder("B").
-		Parents(append(te.LastMilestoneParents(), blockA.StoredBlockID())).
+		Parents(parentsWith(te, blockA.StoredBlockID())).
 		FromWallet(seed2Wallet).
 		Amount(te.ProtocolParameters().TokenSupply).
 		BuildTransactionToWallet(seed1Wallet).
@@ -125,7 +160,7 @@ func TestWhiteFlagWithMultipleConflicting(t *testing.T) {
 
 	// Valid transfer from seed1 (2_779_530_282_277_761) with remainder seed1 (2_779_530_280_277_761) to seed2 (2_000_000)
 	blockB := te.NewBlockBuilder("B").
-		Parents(append(te.LastMilestoneParents(), blockA.StoredBlockID())).
+		Parents(parentsWith(te, blockA.StoredBlockID())).
 		FromWallet(seed1Wallet).
 		Amount(2_000_000).
 		BuildTransactionToWallet(seed2Wallet).
@@ -137,7 +172,7 @@ func TestWhiteFlagWithMultipleConflicting(t *testing.T) {
 
 	// Invalid transfer from seed3 (0) to seed2 (1_000_000) (invalid input)
 	blockC := te.NewBlockBuilder("C").
-		Parents(append(te.LastMilestoneParents(), blockB.StoredBlockID())).
+		Parents(parentsWith(te, blockB.StoredBlockID())).
 		FromWallet(seed3Wallet).
 		Amount(1_000_000).
 		FakeInputs().
@@ -162,7 +197,7 @@ func TestWhiteFlagWithMultipleConflicting(t *testing.T) {
 
 	// Invalid transfer from seed4 (0) to seed2 (1_500_000) (invalid input)
 	blockD := te.NewBlockBuilder("D").
-		Parents(iotago.BlockIDs{blockA.StoredBlockID(), blockC.StoredBlockID()}).
+		Parents(parentsWith(te, blockA.StoredBlockID(), blockC.StoredBlockID())).
 		FromWallet(seed4Wallet).
 		Amount(1_500_000).
 		FakeInputs().
@@ -171,7 +206,7 @@ func TestWhiteFlagWithMultipleConflicting(t *testing.T) {
 
 	// Valid transfer from seed2 (1_000_000) and seed2 (2_000_000) with remainder seed2 (1_500_000) to seed4 (1_500_000)
 	blockE := te.NewBlockBuilder("E").
-		Parents(iotago.BlockIDs{blockB.StoredBlockID(), blockD.StoredBlockID()}).
+		Parents(parentsWith(te, blockB.StoredBlockID(), blockD.StoredBlockID())).
 		FromWallet(seed2Wallet).
 		Amount(1_500_000).
 		BuildTransactionToWallet(seed4Wallet).
@@ -201,7 +236,7 @@ func TestWhiteFlagWithMultipleConflicting(t *testing.T) {
 
 	// Invalid transfer from seed3 (0) to seed2 (1_000_000) (already spent (genesis))
 	blockF := te.NewBlockBuilder("F").
-		Parents(append(te.LastMilestoneParents(), blockE.StoredBlockID())).
+		Parents(parentsWith(te, blockE.StoredBlockID())).
 		FromWallet(seed3Wallet).
 		Amount(1_000_000).
 		UsingOutput(te.GenesisOutput).
@@ -226,7 +261,7 @@ func TestWhiteFlagWithMultipleConflicting(t *testing.T) {
 
 	// Valid transfer from seed4 to seed3 (1_500_000)
 	blockG := te.NewBlockBuilder("G").
-		Parents(append(te.LastMilestoneParents(), blockF.StoredBlockID())).
+		Parents(parentsWith(te, blockF.StoredBlockID())).
 		FromWallet(seed4Wallet).
 		Amount(1_500_000).
 		UsingOutput(seed4WalletOutput).
@@ -236,7 +271,7 @@ func TestWhiteFlagWithMultipleConflicting(t *testing.T) {
 
 	// Valid transfer from seed4 to seed2 (1_500_000) (double spend -> already spent)
 	blockH := te.NewBlockBuilder("H").
-		Parents(iotago.BlockIDs{blockG.StoredBlockID()}).
+		Parents(parentsWith(te, blockG.StoredBlockID())).
 		FromWallet(seed4Wallet).
 		Amount(1_500_000).
 		UsingOutput(seed4WalletOutput).
@@ -273,10 +308,10 @@ func TestWhiteFlagWithOnlyZeroTx(t *testing.T) {
 
 	// Issue some transactions
 	blockA := te.NewBlockBuilder("A").Parents(te.LastMilestoneParents()).BuildTaggedData().Store()
-	blockB := te.NewBlockBuilder("B").Parents(append(te.LastMilestoneParents(), blockA.StoredBlockID())).BuildTaggedData().Store()
+	blockB := te.NewBlockBuilder("B").Parents(parentsWith(te, blockA.StoredBlockID())).BuildTaggedData().Store()
 	blockC := te.NewBlockBuilder("C").Parents(te.LastMilestoneParents()).BuildTaggedData().Store()
-	blockD := te.NewBlockBuilder("D").Parents(iotago.BlockIDs{blockB.StoredBlockID(), blockC.StoredBlockID()}).BuildTaggedData().Store()
-	blockE := te.NewBlockBuilder("E").Parents(iotago.BlockIDs{blockB.StoredBlockID(), blockA.StoredBlockID()}).BuildTaggedData().Store()
+	blockD := te.NewBlockBuilder("D").Parents(parentsWith(te, blockB.StoredBlockID(), blockC.StoredBlockID())).BuildTaggedData().Store()
+	blockE := te.NewBlockBuilder("E").Parents(parentsWith(te, blockB.StoredBlockID(), blockA.StoredBlockID())).BuildTaggedData().Store()
 
 	// Confirming milestone include all blocks up to block E. This should only include A, B and E
 	_, confStats := te.IssueAndConfirmMilestoneOnTips(iotago.BlockIDs{blockE.StoredBlockID()}, true)
@@ -286,7 +321,7 @@ func TestWhiteFlagWithOnlyZeroTx(t *testing.T) {
 	require.Equal(t, 3+1, confStats.BlocksExcludedWithoutTransactions) // 1 is for previous milestone
 
 	// Issue another block
-	blockF := te.NewBlockBuilder("F").Parents(iotago.BlockIDs{blockD.StoredBlockID(), blockE.StoredBlockID()}).BuildTaggedData().Store()
+	blockF := te.NewBlockBuilder("F").Parents(parentsWith(te, blockD.StoredBlockID(), blockE.StoredBlockID())).BuildTaggedData().Store()
 
 	// Confirming milestone at block F. This should confirm D, C and F
 	_, confStats = te.IssueAndConfirmMilestoneOnTips(iotago.BlockIDs{blockF.StoredBlockID()}, true)
@@ -339,7 +374,7 @@ func TestWhiteFlagLastMilestoneNotInPastCone(t *testing.T) {
 
 	// Issue some transactions
 	blockB := te.NewBlockBuilder("B").
-		Parents(append(te.LastMilestoneParents(), blockA.StoredBlockID())).
+		Parents(parentsWith(te, blockA.StoredBlockID())).
 		FromWallet(seed2Wallet).
 		Amount(te.ProtocolParameters().TokenSupply).
 		BuildTransactionToWallet(seed1Wallet).
@@ -393,7 +428,7 @@ func TestWhiteFlagConfirmWithReattachedMilestone(t *testing.T) {
 
 	// Issue some transactions
 	blockB := te.NewBlockBuilder("B").
-		Parents(append(te.LastMilestoneParents(), blockA.StoredBlockID())).
+		Parents(parentsWith(te, blockA.StoredBlockID())).
 		FromWallet(seed2Wallet).
 		Amount(te.ProtocolParameters().TokenSupply).
 		BuildTransactionToWallet(seed1Wallet).
@@ -414,11 +449,16 @@ func TestWhiteFlagConfirmWithReattachedMilestone(t *testing.T) {
 	milestone5Reattachment := te.ReattachBlock(blockIDMilestone5)
 
 	// Invalid reattachment with different parents
-	invalidMilestone5Reattachment := te.ReattachBlock(blockIDMilestone5, blockB.StoredBlockID(), iotago.EmptyBlockID())
+	invalidParents := iotago.BlockIDs{
+		blockB.StoredBlockID(),
+		milestone5Reattachment,
+		iotago.EmptyBlockID(),
+	}.RemoveDupsAndSort()
+	invalidMilestone5Reattachment := te.ReattachBlock(blockIDMilestone5, invalidParents...)
 
 	// Issue a transaction referencing the milestone5 reattached block specifically
 	blockC := te.NewBlockBuilder("C").
-		Parents(iotago.BlockIDs{blockB.StoredBlockID(), milestone5Reattachment}).
+		Parents(parentsWith(te, blockB.StoredBlockID(), milestone5Reattachment)).
 		FromWallet(seed1Wallet).
 		Amount(te.ProtocolParameters().TokenSupply).
 		BuildTransactionToWallet(seed2Wallet).

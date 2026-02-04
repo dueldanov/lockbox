@@ -31,6 +31,7 @@ const (
 	MaxReferencedTipAgeSemiLazy             = 3 * time.Second
 	MaxChildrenSemiLazy                     = 100
 	MinPoWScore                             = 1.0
+	MinPreviousRefs                         = 3
 )
 
 func TestTipSelect(t *testing.T) {
@@ -53,6 +54,7 @@ func TestTipSelect(t *testing.T) {
 		RetentionRulesTipsLimitSemiLazy,
 		MaxReferencedTipAgeSemiLazy,
 		uint32(MaxChildrenSemiLazy),
+		MinPreviousRefs,
 	)
 
 	// fill the storage with some blocks to fill the tipselect pool
@@ -68,8 +70,7 @@ func TestTipSelect(t *testing.T) {
 		require.NoError(te.TestInterface, err)
 		require.NotNil(te.TestInterface, tips)
 
-		require.GreaterOrEqual(te.TestInterface, len(tips), 1)
-		require.LessOrEqual(te.TestInterface, len(tips), 8)
+		require.Equal(te.TestInterface, MinPreviousRefs, len(tips))
 
 		cmi := te.SyncManager().ConfirmedMilestoneIndex()
 

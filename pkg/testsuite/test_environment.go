@@ -11,12 +11,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotaledger/hive.go/app/configuration"
-	appLogger "github.com/iotaledger/hive.go/app/logger"
-	"github.com/iotaledger/hive.go/crypto"
-	"github.com/iotaledger/hive.go/kvstore"
-	"github.com/iotaledger/hive.go/kvstore/mapdb"
-	"github.com/iotaledger/hive.go/serializer/v2"
 	"github.com/dueldanov/lockbox/v2/pkg/metrics"
 	"github.com/dueldanov/lockbox/v2/pkg/model/milestonemanager"
 	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
@@ -25,6 +19,12 @@ import (
 	"github.com/dueldanov/lockbox/v2/pkg/pow"
 	"github.com/dueldanov/lockbox/v2/pkg/protocol"
 	"github.com/dueldanov/lockbox/v2/pkg/whiteflag"
+	"github.com/iotaledger/hive.go/app/configuration"
+	appLogger "github.com/iotaledger/hive.go/app/logger"
+	"github.com/iotaledger/hive.go/crypto"
+	"github.com/iotaledger/hive.go/kvstore"
+	"github.com/iotaledger/hive.go/kvstore/mapdb"
+	"github.com/iotaledger/hive.go/serializer/v2"
 	iotago "github.com/iotaledger/iota.go/v3"
 	"github.com/iotaledger/iota.go/v3/keymanager"
 )
@@ -90,6 +90,12 @@ type TestEnvironment struct {
 type OnMilestoneConfirmedFunc func(confirmation *whiteflag.Confirmation)
 type OnLedgerUpdatedFunc func(index iotago.MilestoneIndex, newOutputs utxo.Outputs, newSpents utxo.Spents)
 
+var genesisParents = iotago.BlockIDs{
+	iotago.EmptyBlockID(),
+	iotago.BlockID{1},
+	iotago.BlockID{2},
+}
+
 // SetupTestEnvironment initializes a clean database with initial snapshot,
 // configures a coordinator with a clean state, bootstraps the network and issues the first "numberOfMilestones" milestones.
 func SetupTestEnvironment(testInterface testing.TB, genesisAddress *iotago.Ed25519Address, numberOfMilestones int, protocolVersion byte, belowMaxDepth uint8, targetScore uint32, showConfirmationGraphs bool) *TestEnvironment {
@@ -148,7 +154,9 @@ func SetupTestEnvironment(testInterface testing.TB, genesisAddress *iotago.Ed255
 	require.NoError(te.TestInterface, err)
 
 	// Initialize SEP
-	te.storage.SolidEntryPointsAddWithoutLocking(iotago.EmptyBlockID(), 0)
+	for _, parent := range genesisParents {
+		te.storage.SolidEntryPointsAddWithoutLocking(parent, 0)
+	}
 
 	// Initialize ProtocolManager
 	ledgerIndex, err := te.storage.UTXOManager().ReadLedgerIndex()
@@ -200,13 +208,19 @@ func SetupTestEnvironment(testInterface testing.TB, genesisAddress *iotago.Ed255
 
 	for i := 1; i <= numberOfMilestones; i++ {
 		_, confStats := te.IssueAndConfirmMilestoneOnTips(iotago.BlockIDs{}, false)
-		require.Equal(te.TestInterface, 1, confStats.BlocksReferenced)                  // 1 for previous milestone
+		expectedReferenced := 1
+		require.Equal(te.TestInterface, expectedReferenced, confStats.BlocksReferenced) // previous milestone
 		require.Equal(te.TestInterface, 1, confStats.BlocksExcludedWithoutTransactions) // 1 for previous milestone
 		require.Equal(te.TestInterface, 0, confStats.BlocksIncludedWithTransactions)
 		require.Equal(te.TestInterface, 0, confStats.BlocksExcludedWithConflictingTransactions)
 	}
 
 	return te
+}
+
+// GenesisParents returns the configured genesis parents for tests.
+func (te *TestEnvironment) GenesisParents() iotago.BlockIDs {
+	return append(iotago.BlockIDs{}, genesisParents...)
 }
 
 func (te *TestEnvironment) ConfigureUTXOCallbacks(onLedgerUpdatedFunc OnLedgerUpdatedFunc) {
@@ -309,12 +323,24 @@ func (te *TestEnvironment) BuildTangle(initBlocksCount int,
 	getParents := func() iotago.BlockIDs {
 
 		if len(blockIDs) < initBlocksCount {
-			// reference the first milestone at the beginning
-			return iotago.BlockIDs{te.LastMilestoneBlockID()}
+			// reference the first milestone parents at the beginning
+			return te.LastMilestoneParents()
 		}
 
 		parents := iotago.BlockIDs{}
-		for j := 2; j <= 2+rand.Intn(7); j++ {
+		seen := make(map[iotago.BlockID]struct{}, 3)
+		addParent := func(id iotago.BlockID) {
+			if len(parents) >= 3 {
+				return
+			}
+			if _, exists := seen[id]; exists {
+				return
+			}
+			seen[id] = struct{}{}
+			parents = append(parents, id)
+		}
+
+		for len(parents) < 3 {
 			msIndex := rand.Intn(belowMaxDepth)
 			if msIndex > len(blockIDsPerMilestones)-1 {
 				msIndex = rand.Intn(len(blockIDsPerMilestones))
@@ -322,11 +348,10 @@ func (te *TestEnvironment) BuildTangle(initBlocksCount int,
 			milestoneBlocks := blockIDsPerMilestones[len(blockIDsPerMilestones)-1-msIndex]
 			if len(milestoneBlocks) == 0 {
 				// use the last milestone block id
-				parents = append(parents, te.LastMilestoneBlockID())
-
+				addParent(te.LastMilestoneBlockID())
 				continue
 			}
-			parents = append(parents, milestoneBlocks[rand.Intn(len(milestoneBlocks))])
+			addParent(milestoneBlocks[rand.Intn(len(milestoneBlocks))])
 		}
 
 		return parents.RemoveDupsAndSort()

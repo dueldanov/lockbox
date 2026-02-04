@@ -193,14 +193,22 @@ func TestAEADConstantTime(t *testing.T) {
 	plaintext := []byte("secret message for constant-time verification test")
 	ciphertext, _ := encryptor.Encrypt(plaintext)
 
-	// Create tampered versions
+	nonceSize := encryptor.NonceSize()
+	tagSize := encryptor.Overhead()
+	bodyStart := nonceSize
+	bodyEnd := len(ciphertext) - tagSize - 1
+	if bodyEnd <= bodyStart {
+		t.Skip("ciphertext too short for timing test")
+	}
+
+	// Create tampered versions (only within ciphertext body, not nonce/tag)
 	tampered1 := make([]byte, len(ciphertext))
 	copy(tampered1, ciphertext)
-	tampered1[0] ^= 0xFF // First byte wrong
+	tampered1[bodyStart] ^= 0xFF // First byte of ciphertext body
 
 	tampered2 := make([]byte, len(ciphertext))
 	copy(tampered2, ciphertext)
-	tampered2[len(tampered2)-1] ^= 0xFF // Last byte wrong (in auth tag)
+	tampered2[bodyEnd] ^= 0xFF // Last byte of ciphertext body
 
 	// Measure timing
 	const iterations = 2000

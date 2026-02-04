@@ -12,12 +12,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/iotaledger/hive.go/serializer/v2"
 	"github.com/dueldanov/lockbox/v2/pkg/metrics"
 	"github.com/dueldanov/lockbox/v2/pkg/model/storage"
 	"github.com/dueldanov/lockbox/v2/pkg/p2p"
 	"github.com/dueldanov/lockbox/v2/pkg/protocol/gossip"
 	"github.com/dueldanov/lockbox/v2/pkg/testsuite"
+	"github.com/iotaledger/hive.go/serializer/v2"
 	iotago "github.com/iotaledger/iota.go/v3"
 )
 
@@ -60,6 +60,7 @@ func TestMessageProcessorEmit(t *testing.T) {
 
 	processor, err := gossip.NewMessageProcessor(te.Storage(), te.SyncManager(), gossip.NewRequestQueue(), manager, serverMetrics, te.ProtocolManager(), &gossip.Options{
 		WorkUnitCacheOpts: testsuite.TestProfileCaches.IncomingBlocksFilter,
+		MinPreviousRefs:   3,
 	})
 	require.NoError(t, err)
 
@@ -68,8 +69,7 @@ func TestMessageProcessorEmit(t *testing.T) {
 		  "parents": [
 			"0x42e53f6bc0ecaf69f0f32dfbd838a0f96396c09b92e53225784ee9d269671939",
 			"0x77cfab5b59a894bd5992b303e93c126191257c025136c610dd351b06863a9ee3",
-			"0x912f97dd2b76ee450bf8495f2c1e47d4255482a5d62aba3bb30e5e2555dea164",
-			"0xa0fe3e8192f0bc4270dd38b3ff08c673cb2253d75891a54bbe534540ae770623"
+			"0x912f97dd2b76ee450bf8495f2c1e47d4255482a5d62aba3bb30e5e2555dea164"
 		  ],
 		  "payload": {
 			"type": 5,
@@ -91,7 +91,7 @@ func TestMessageProcessorEmit(t *testing.T) {
 	assert.Error(t, err)
 
 	// set valid parents
-	iotaBlock.Parents = iotago.BlockIDs{[32]byte{}}
+	iotaBlock.Parents = te.GenesisParents()
 
 	// pow again, so we have a valid block
 	_, err = te.PoWHandler.DoPoW(context.Background(), iotaBlock, serializer.DeSeriModePerformValidation, te.ProtocolParameters(), 1, nil)

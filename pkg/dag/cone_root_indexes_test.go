@@ -69,7 +69,8 @@ func TestConeRootIndexes(t *testing.T) {
 	cmi := latestMilestone.Milestone().Index()
 
 	// issue block that should be below max depth
-	parents := append(latestMilestone.Milestone().Parents(), iotago.EmptyBlockID())
+	parents := latestMilestone.Milestone().Parents()
+	parents = append(parents[:2], iotago.EmptyBlockID())
 	block := te.NewBlockBuilder("below max depth").Parents(parents.RemoveDupsAndSort()).BuildTaggedData().Store()
 
 	cachedBlockMeta := te.Storage().CachedBlockMetadataOrNil(block.StoredBlockID())
