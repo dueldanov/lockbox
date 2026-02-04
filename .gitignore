@@ -38,6 +38,7 @@ snapshots/
 # log files
 hornet.log
 lockbox.log
+lockbox_devnet.log
 startup.log
 shutdown.log
 integration-tests/logs/*.log
