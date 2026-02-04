@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
@@ -256,8 +257,17 @@ func (n *Network) CreateIndexer(cfg *INXIndexerConfig) (*INXExtension, error) {
 func newNetwork(dockerClient *client.Client, name string, netType NetworkType, tester *DockerContainer) (*Network, error) {
 	ctx := context.Background()
 	if existing, err := dockerClient.NetworkInspect(ctx, name, types.NetworkInspectOptions{}); err == nil {
-		if len(existing.Containers) > 0 {
-			return nil, fmt.Errorf("docker network %s already exists with %d containers", name, len(existing.Containers))
+		if tester != nil {
+			_ = tester.DisconnectFromNetwork(existing.ID)
+		}
+		testerName := strings.TrimPrefix(containerNameTester, "/")
+		for id, endpoint := range existing.Containers {
+			if endpoint.Name == testerName || endpoint.Name == containerNameTester {
+				continue
+			}
+			if err := dockerClient.ContainerRemove(ctx, id, types.ContainerRemoveOptions{Force: true}); err != nil {
+				return nil, err
+			}
 		}
 		if err := dockerClient.NetworkRemove(ctx, existing.ID); err != nil {
 			return nil, err
