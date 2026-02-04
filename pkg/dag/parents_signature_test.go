@@ -14,7 +14,7 @@ func TestValidateParentsSignatureTransaction(t *testing.T) {
 	block := &iotago.Block{
 		Parents: parents,
 		Payload: &iotago.Transaction{
-			Essence: iotago.TransactionEssence{
+			Essence: &iotago.TransactionEssence{
 				Payload: ParentsSignatureTaggedData(parents),
 			},
 		},
@@ -40,7 +40,7 @@ func TestValidateParentsSignatureMismatch(t *testing.T) {
 	block := &iotago.Block{
 		Parents: parents,
 		Payload: &iotago.Transaction{
-			Essence: iotago.TransactionEssence{
+			Essence: &iotago.TransactionEssence{
 				Payload: tagged,
 			},
 		},

@@ -53,6 +53,9 @@ func ValidateParentsSignature(block *iotago.Block) error {
 		return nil
 	}
 
+	if tx.Essence == nil {
+		return ErrParentsSignatureMissing
+	}
 	if tx.Essence.Payload == nil {
 		return ErrParentsSignatureMissing
 	}
