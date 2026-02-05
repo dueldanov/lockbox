@@ -66,7 +66,7 @@ func init() {
 func DefaultConfig() *AppConfig {
 	cfg := &AppConfig{
 		Name: "",
-		Envs: []string{"LOGGER_LEVEL=debug", "LOCKBOX_DEV_MODE=true"},
+		Envs: []string{"LOGGER_LEVEL=debug", "LOCKBOX_DEV_MODE=true", "GOGC=50", "GOMEMLIMIT=1GiB"},
 		Binds: []string{
 			fmt.Sprintf("lockbox-testing-assets:%s:rw", assetsDir),
 		},
@@ -78,6 +78,7 @@ func DefaultConfig() *AppConfig {
 		RestAPI:     DefaultRestAPIConfig(),
 		INX:         DefaultINXConfig(),
 		Profiling:   DefaultProfilingConfig(),
+		Prometheus:  DefaultPrometheusConfig(),
 		Receipts:    DefaultNodeReceiptValidatorConfig(),
 		Autopeering: DefaultAutopeeringConfig(),
 		INXCoo:      DefaultINXCoordinatorConfig(),
@@ -221,6 +222,8 @@ type AppConfig struct {
 	DAG DAGConfig
 	// Profiling config.
 	Profiling ProfilingConfig
+	// Prometheus config.
+	Prometheus PrometheusConfig
 	// Receipts config
 	Receipts ReceiptsConfig
 	// Autopeering config.
@@ -253,10 +256,31 @@ func (cfg *AppConfig) CLIFlags() []string {
 	cliFlags = append(cliFlags, cfg.RestAPI.CLIFlags()...)
 	cliFlags = append(cliFlags, cfg.INX.CLIFlags()...)
 	cliFlags = append(cliFlags, cfg.Profiling.CLIFlags()...)
+	cliFlags = append(cliFlags, cfg.Prometheus.CLIFlags()...)
 	cliFlags = append(cliFlags, cfg.Receipts.CLIFlags()...)
 	cliFlags = append(cliFlags, cfg.Autopeering.CLIFlags()...)
 
 	return cliFlags
+}
+
+// PrometheusConfig defines Prometheus plugin configuration.
+type PrometheusConfig struct {
+	// Enabled defines whether Prometheus metrics are enabled.
+	Enabled bool
+}
+
+// CLIFlags returns the config as CLI flags.
+func (promConfig *PrometheusConfig) CLIFlags() []string {
+	return []string{
+		fmt.Sprintf("--%s=%v", "prometheus.enabled", promConfig.Enabled),
+	}
+}
+
+// DefaultPrometheusConfig returns the default Prometheus config.
+func DefaultPrometheusConfig() PrometheusConfig {
+	return PrometheusConfig{
+		Enabled: false,
+	}
 }
 
 // DatabaseConfig defines database specific configuration.
