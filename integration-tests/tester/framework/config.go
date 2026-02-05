@@ -299,7 +299,7 @@ func (dbConfig *DatabaseConfig) CLIFlags() []string {
 // DefaultDatabaseConfig returns the default database config.
 func DefaultDatabaseConfig() DatabaseConfig {
 	return DatabaseConfig{
-		Engine: "mapdb",
+		Engine: "pebble",
 	}
 }
 
