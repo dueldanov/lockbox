@@ -66,7 +66,7 @@ func init() {
 func DefaultConfig() *AppConfig {
 	cfg := &AppConfig{
 		Name: "",
-		Envs: []string{"LOGGER_LEVEL=debug", "LOCKBOX_DEV_MODE=true", "GOGC=50", "GOMEMLIMIT=1GiB"},
+		Envs: []string{"LOGGER_LEVEL=info", "LOCKBOX_DEV_MODE=true", "GOGC=50", "GOMEMLIMIT=1GiB"},
 		Binds: []string{
 			fmt.Sprintf("lockbox-testing-assets:%s:rw", assetsDir),
 		},
@@ -75,6 +75,7 @@ func DefaultConfig() *AppConfig {
 		Snapshot:    DefaultSnapshotConfig(),
 		Protocol:    DefaultProtocolConfig(),
 		DAG:         DefaultDAGConfig(),
+		LockBox:     DefaultLockBoxConfig(),
 		RestAPI:     DefaultRestAPIConfig(),
 		INX:         DefaultINXConfig(),
 		Profiling:   DefaultProfilingConfig(),
@@ -220,6 +221,8 @@ type AppConfig struct {
 	Protocol ProtocolConfig
 	// DAG config.
 	DAG DAGConfig
+	// LockBox config.
+	LockBox LockBoxConfig
 	// Profiling config.
 	Profiling ProfilingConfig
 	// Prometheus config.
@@ -253,6 +256,7 @@ func (cfg *AppConfig) CLIFlags() []string {
 	cliFlags = append(cliFlags, cfg.Snapshot.CLIFlags()...)
 	cliFlags = append(cliFlags, cfg.Protocol.CLIFlags()...)
 	cliFlags = append(cliFlags, cfg.DAG.CLIFlags()...)
+	cliFlags = append(cliFlags, cfg.LockBox.CLIFlags()...)
 	cliFlags = append(cliFlags, cfg.RestAPI.CLIFlags()...)
 	cliFlags = append(cliFlags, cfg.INX.CLIFlags()...)
 	cliFlags = append(cliFlags, cfg.Profiling.CLIFlags()...)
@@ -261,6 +265,30 @@ func (cfg *AppConfig) CLIFlags() []string {
 	cliFlags = append(cliFlags, cfg.Autopeering.CLIFlags()...)
 
 	return cliFlags
+}
+
+// LockBoxConfig defines LockBox plugin configuration.
+type LockBoxConfig struct {
+	// Enabled defines whether LockBox is enabled.
+	Enabled bool
+	// B2BEnabled defines whether the B2B gRPC is enabled.
+	B2BEnabled bool
+}
+
+// CLIFlags returns the config as CLI flags.
+func (lockBoxConfig *LockBoxConfig) CLIFlags() []string {
+	return []string{
+		fmt.Sprintf("--%s=%v", "lockbox.enabled", lockBoxConfig.Enabled),
+		fmt.Sprintf("--%s=%v", "lockbox.b2b.enabled", lockBoxConfig.B2BEnabled),
+	}
+}
+
+// DefaultLockBoxConfig returns the default LockBox config.
+func DefaultLockBoxConfig() LockBoxConfig {
+	return LockBoxConfig{
+		Enabled:    false,
+		B2BEnabled: false,
+	}
 }
 
 // PrometheusConfig defines Prometheus plugin configuration.
