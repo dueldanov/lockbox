@@ -8,14 +8,14 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/dueldanov/lockbox/v2/internal/service"
+	"github.com/dueldanov/lockbox/v2/internal/interfaces"
 	"github.com/iotaledger/hive.go/logger"
 )
 
 // RedundancyManager manages tier-based redundancy for shards
 type RedundancyManager struct {
 	*logger.WrappedLogger
-	tierConfigs      map[service.Tier]*RedundancyConfig
+	tierConfigs      map[interfaces.Tier]*RedundancyConfig
 	distributionAlgo *ShardDistributionAlgorithm
 	healthManager    *ShardHealthManager
 	mu               sync.RWMutex
@@ -34,7 +34,7 @@ type RedundancyConfig struct {
 func NewRedundancyManager(log *logger.Logger, distributionAlgo *ShardDistributionAlgorithm, healthManager *ShardHealthManager) *RedundancyManager {
 	rm := &RedundancyManager{
 		WrappedLogger:    logger.NewWrappedLogger(log),
-		tierConfigs:      make(map[service.Tier]*RedundancyConfig),
+		tierConfigs:      make(map[interfaces.Tier]*RedundancyConfig),
 		distributionAlgo: distributionAlgo,
 		healthManager:    healthManager,
 	}
@@ -44,7 +44,7 @@ func NewRedundancyManager(log *logger.Logger, distributionAlgo *ShardDistributio
 
 // initializeTierConfigs sets up default tier configurations
 func (rm *RedundancyManager) initializeTierConfigs() {
-	rm.tierConfigs[service.TierBasic] = &RedundancyConfig{
+	rm.tierConfigs[interfaces.TierBasic] = &RedundancyConfig{
 		MinCopies:     1,
 		MaxCopies:     2,
 		GeoRedundancy: 1,
@@ -52,7 +52,7 @@ func (rm *RedundancyManager) initializeTierConfigs() {
 		CheckInterval: 10 * time.Minute,
 	}
 
-	rm.tierConfigs[service.TierStandard] = &RedundancyConfig{
+	rm.tierConfigs[interfaces.TierStandard] = &RedundancyConfig{
 		MinCopies:     2,
 		MaxCopies:     3,
 		GeoRedundancy: 2,
@@ -60,7 +60,7 @@ func (rm *RedundancyManager) initializeTierConfigs() {
 		CheckInterval: 5 * time.Minute,
 	}
 
-	rm.tierConfigs[service.TierPremium] = &RedundancyConfig{
+	rm.tierConfigs[interfaces.TierPremium] = &RedundancyConfig{
 		MinCopies:     3,
 		MaxCopies:     5,
 		GeoRedundancy: 3,
@@ -68,7 +68,7 @@ func (rm *RedundancyManager) initializeTierConfigs() {
 		CheckInterval: 2 * time.Minute,
 	}
 
-	rm.tierConfigs[service.TierElite] = &RedundancyConfig{
+	rm.tierConfigs[interfaces.TierElite] = &RedundancyConfig{
 		MinCopies:     5,
 		MaxCopies:     7,
 		GeoRedundancy: 5,
@@ -78,7 +78,7 @@ func (rm *RedundancyManager) initializeTierConfigs() {
 }
 
 // GetRedundancyConfig returns the redundancy configuration for a tier
-func (rm *RedundancyManager) GetRedundancyConfig(tier service.Tier) (*RedundancyConfig, error) {
+func (rm *RedundancyManager) GetRedundancyConfig(tier interfaces.Tier) (*RedundancyConfig, error) {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
@@ -91,7 +91,7 @@ func (rm *RedundancyManager) GetRedundancyConfig(tier service.Tier) (*Redundancy
 }
 
 // EnsureRedundancy ensures proper redundancy for a shard based on tier
-func (rm *RedundancyManager) EnsureRedundancy(ctx context.Context, shardID string, tier service.Tier, distribution *ShardDistribution) error {
+func (rm *RedundancyManager) EnsureRedundancy(ctx context.Context, shardID string, tier interfaces.Tier, distribution *ShardDistribution) error {
 	config, err := rm.GetRedundancyConfig(tier)
 	if err != nil {
 		return err
@@ -206,7 +206,7 @@ func (rm *RedundancyManager) selectNodeForLocation(location string) string {
 }
 
 // MonitorRedundancy continuously monitors redundancy levels
-func (rm *RedundancyManager) MonitorRedundancy(ctx context.Context, shardID string, tier service.Tier, distribution *ShardDistribution) {
+func (rm *RedundancyManager) MonitorRedundancy(ctx context.Context, shardID string, tier interfaces.Tier, distribution *ShardDistribution) {
 	config, err := rm.GetRedundancyConfig(tier)
 	if err != nil {
 		rm.LogErrorf("Failed to get redundancy config: %v", err)

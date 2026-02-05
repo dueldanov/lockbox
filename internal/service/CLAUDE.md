@@ -17,7 +17,6 @@
 | `tier.go` | TierCapabilities |
 | `storage.go` | StorageManager |
 | `grpc_server.go` | gRPC endpoints |
-| `compiler.go` | LockScript integration (TODO) |
 
 ## Ключевые типы
 
@@ -33,15 +32,25 @@ type Service struct {
     // Crypto
     shardEncryptor  *crypto.ShardEncryptor
     zkpManager      *crypto.ZKPManager
+    zkpProvider     interfaces.ZKPProvider
+    hkdfManager     *crypto.HKDFManager
+    decoyGenerator  *crypto.DecoyGenerator
+    shardMixer      *crypto.ShardMixer
 
     // Verification
     verifier        *verification.Verifier
     nodeSelector    *verification.NodeSelector
+    tokenManager    *verification.TokenManager
+    retryManager    *verification.RetryManager
+    rateLimiter     *verification.RateLimiter
+
+    // Payment
+    paymentProcessor *payment.PaymentProcessor
 
     // State
     lockedAssets    map[string]*LockedAsset
     pendingUnlocks  map[string]time.Time
-    scriptCompiler  interface{} // TODO: *lockscript.Engine
+    scriptCompiler  interface{} // *lockscript.Engine (initialized in NewService)
 }
 
 // ServiceConfig конфигурация сервиса
@@ -63,6 +72,7 @@ type TierCapabilities struct {
     MetadataDecoyRatio float64 // 0/0/1.0/2.0
     MultiSigSupported  bool
     EmergencyUnlock    bool
+    ScriptComplexity   int
 }
 ```
 
@@ -74,19 +84,21 @@ type TierCapabilities struct {
 func (s *Service) LockAsset(ctx context.Context, req *LockAssetRequest) (*LockAssetResponse, error)
 ```
 
-**Что делает сейчас:**
-1. Валидация duration
-2. Генерация assetID
-3. Создание ownership proof (ZKP)
-4. Шифрование данных
-5. Сохранение шардов
-6. Сохранение asset в storage
+**Реализовано:**
+1. ✅ Валидация duration
+2. ✅ Валидация LockScript (компиляция при Lock для раннего обнаружения ошибок)
+3. ✅ Генерация assetID
+4. ✅ Создание ownership proof (ZKP Groth16)
+5. ✅ HKDF key derivation
+6. ✅ XChaCha20-Poly1305 шифрование (V2 format)
+7. ✅ DecoyGenerator — генерация decoy shards по tier ratio
+8. ✅ ShardMixer — перемешивание real + decoy shards
+9. ✅ Tier-based redundant copies (ShardCopies копий каждого шарда)
+10. ✅ Metadata decoys (Premium/Elite)
+11. ✅ Сохранение asset в storage
 
-**Что НЕ делает (TODO):**
-- ❌ Вызов DecoyGenerator
-- ❌ Применение tier.ShardCopies
-- ❌ Компиляция LockScript
-- ❌ Geo-distribution
+**Остаётся (TODO):**
+- ❌ Geo-distribution (шарды хранятся локально)
 
 ### UnlockAsset
 
@@ -94,26 +106,24 @@ func (s *Service) LockAsset(ctx context.Context, req *LockAssetRequest) (*LockAs
 func (s *Service) UnlockAsset(ctx context.Context, req *UnlockAssetRequest) (*UnlockAssetResponse, error)
 ```
 
-**Что делает:**
-1. Получение asset
-2. Проверка unlock time
-3. Верификация ownership proof
-4. Расшифровка шардов
-
-**Что НЕ делает (TODO):**
-- ❌ Исполнение LockScript
-- ❌ Проверка multi-sig (TODO на line 587)
-- ❌ Извлечение real shards из mixed
+**Реализовано:**
+1. ✅ Получение asset
+2. ✅ Проверка unlock time
+3. ✅ Верификация ownership proof (ZKP)
+4. ✅ Multi-sig проверка подписей
+5. ✅ Исполнение LockScript условий
+6. ✅ Trial decryption для восстановления real shards (V2)
+7. ✅ Расшифровка шардов
 
 ## Tier Capabilities
 
 ```go
 caps := GetCapabilities(TierStandard)
 
-// Basic:    ShardCopies=3,  DecoyRatio=0.5, MultiSig=false
-// Standard: ShardCopies=5,  DecoyRatio=1.0, MultiSig=true
-// Premium:  ShardCopies=7,  DecoyRatio=1.5, MultiSig=true
-// Elite:    ShardCopies=10, DecoyRatio=2.0, MultiSig=true
+// Basic:    ShardCopies=3,  DecoyRatio=0.5, MultiSig=false, ScriptComplexity=1
+// Standard: ShardCopies=5,  DecoyRatio=1.0, MultiSig=true,  ScriptComplexity=2
+// Premium:  ShardCopies=7,  DecoyRatio=1.5, MultiSig=true,  ScriptComplexity=3
+// Elite:    ShardCopies=10, DecoyRatio=2.0, MultiSig=true,  ScriptComplexity=4
 ```
 
 ## Паттерны использования
@@ -136,6 +146,7 @@ svc, err := NewService(
     protocolManager,
     config,
 )
+// NewService automatically calls InitializeCompiler()
 ```
 
 ### Lock/Unlock flow
@@ -173,79 +184,24 @@ err := svc.EmergencyUnlock(
 
 ## Зависимости
 
-- **От:** `crypto`, `lockscript`, `verification`, `interfaces`
+- **От:** `crypto`, `lockscript`, `verification`, `interfaces`, `payment`, `logging`
 - **Используется в:** `grpc_server`, main
 
 ## Тесты
 
 ```bash
 go test ./internal/service/... -v
-
-# ПРОБЛЕМА: падает из-за logger
-# Решение: добавить initTestLogger()
 ```
 
-## Важные проблемы
+## Известные проблемы
 
-### 1. TestLockAsset падает
-
-```go
-// service_test.go:16
-func TestLockAsset(t *testing.T) {
-    svc := setupTestService(t)  // ← panic: logger not initialized
-}
-
-// Решение: добавить в setupTestService()
-initLoggerOnce.Do(func() {
-    cfg := configuration.New()
-    logger.InitGlobalLogger(cfg)
-})
+### 1. CreateMultiSig не реализован
+```
+Возвращает codes.Unimplemented в gRPC server
 ```
 
-### 2. InitializeCompiler = заглушка
-
-```go
-// service.go:328
-func (s *Service) InitializeCompiler() error {
-    // This will be implemented with the LockScript compiler
-    return nil  // ← TODO
-}
-
-// Нужно:
-func (s *Service) InitializeCompiler() error {
-    engine := lockscript.NewEngine(nil, 65536, 5*time.Second)
-    engine.RegisterBuiltinFunctions()
-    s.scriptCompiler = engine
-    return nil
-}
+### 2. Geo-distribution не реализована
 ```
-
-### 3. Decoys не интегрированы
-
-```go
-// service.go:163 - после шифрования, ДО сохранения
-shards, err := s.shardEncryptor.EncryptData(assetData)
-
-// TODO: добавить
-caps := GetCapabilities(s.config.Tier)
-gen := crypto.NewDecoyGenerator()
-decoys := gen.GenerateDecoyShards(shards, caps.DecoyRatio)
-mixer := crypto.NewShardMixer()
-mixed, indexMap := mixer.Mix(shards, decoys)
-// сохранять indexMap вместе с asset
-```
-
-### 4. Multi-sig не проверяется
-
-```go
-// service.go:587
-// TODO: Verify each signature against MultiSigAddresses
-
-// Нужно:
-for i, sig := range signatures {
-    addr := asset.MultiSigAddresses[i]
-    if !lockscript.VerifyEd25519Signature(addr.String(), assetID, hex.EncodeToString(sig)) {
-        return fmt.Errorf("invalid signature")
-    }
-}
+Redundant copies хранятся локально с разными ключами.
+В production нужна интеграция с RedundancyManager из storage пакета.
 ```

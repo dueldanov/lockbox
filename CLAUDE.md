@@ -204,14 +204,22 @@ func TestVerify_Good(t *testing.T) {
 - ✅ Phase 1: deserializeShard, getOwnershipProof, Ed25519 signing, renaming
 - ✅ Phase 1.5: GetAssetStatus, ListAssets, EmergencyUnlock
 - ✅ Phase 2: Protobuf generation + gRPC server
+- ✅ DecoyGenerator интегрирован в LockAsset
+- ✅ ShardMixer интегрирован в LockAsset
+- ✅ Multi-sig проверка в UnlockAsset
+- ✅ LockScript исполнение в UnlockAsset
+- ✅ LockScript валидация при LockAsset (fail-fast)
+- ✅ InitializeCompiler вызывается в NewService
+- ✅ Tier-based ShardCopies redundancy
+- ✅ Metadata decoys (Premium/Elite)
+- ✅ Import cycle в storage/redundancy.go исправлен
 
 ### В работе:
 - Phase 3: Унификация типов, verification layer
 
 ### Известные проблемы:
-- Ошибки компиляции в `tiering`, `core`, `security`, `storage`, `performance`
 - `CreateMultiSig` не реализован (возвращает Unimplemented)
-- Import cycles в некоторых пакетах
+- Geo-distribution шардов не реализована (копии хранятся локально)
 
 ---
 
@@ -379,16 +387,15 @@ type Verifier struct {
 Решение: Использовать interfaces.TierStandard вместо service.TierStandard
 ```
 
-### 3. Компоненты не интегрированы
+### 3. CreateMultiSig не реализован
 ```
-LockAsset (service.go:163):
-- НЕ вызывает DecoyGenerator
-- НЕ применяет tier.ShardCopies
-- НЕ исполняет LockScript
+gRPC server возвращает codes.Unimplemented
+```
 
-UnlockAsset (service.go:210):
-- НЕ проверяет multi-sig (TODO на line 587)
-- НЕ исполняет LockScript условия
+### 4. Geo-distribution не реализована
+```
+Redundant shard copies хранятся локально с разными ключами.
+В production нужна интеграция с storage.RedundancyManager.
 ```
 
 ---

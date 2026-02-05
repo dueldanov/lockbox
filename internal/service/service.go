@@ -181,6 +181,11 @@ func NewService(
 	verifier := verification.NewVerifier(log, nodeSelector, tokenManager, &verificationStorageAdapter{svc})
 	svc.verifier = verifier
 
+	// Initialize LockScript compiler for script validation during LockAsset
+	if err := svc.InitializeCompiler(); err != nil {
+		return nil, fmt.Errorf("failed to initialize LockScript compiler: %w", err)
+	}
+
 	return svc, nil
 }
 
@@ -236,6 +241,20 @@ func (s *Service) LockAsset(ctx context.Context, req *LockAssetRequest) (*LockAs
 	stepStart = time.Now()
 	log.LogStepWithDuration(logging.PhaseInputValidation, "get_tier_ratio",
 		fmt.Sprintf("ratio=%.1f", tierCaps.DecoyRatio), time.Since(stepStart), nil)
+
+	// Validate LockScript at lock time (fail-fast before expensive operations)
+	if req.LockScript != "" {
+		stepStart = time.Now()
+		if engine, ok := s.scriptCompiler.(*lockscript.Engine); ok {
+			if _, err := engine.CompileScript(ctx, req.LockScript); err != nil {
+				log.LogStepWithDuration(logging.PhaseInputValidation, "validate_lockscript",
+					fmt.Sprintf("script=%q, FAIL", req.LockScript), time.Since(stepStart), err)
+				return nil, fmt.Errorf("invalid lock script: %w", err)
+			}
+			log.LogStepWithDuration(logging.PhaseInputValidation, "validate_lockscript",
+				fmt.Sprintf("script=%q, pass", req.LockScript), time.Since(stepStart), nil)
+		}
+	}
 
 	// #4 generate_bundle_id - Creates unique transaction bundle ID
 	stepStart = time.Now()
@@ -683,9 +702,9 @@ func (s *Service) LockAsset(ctx context.Context, req *LockAssetRequest) (*LockAs
 	log.LogStepWithDuration(logging.PhaseNetworkSubmission, "SubmitBundle",
 		fmt.Sprintf("bundleID=%s, nodeCount=%d", assetID, tierCaps.ShardCopies), time.Since(stepStart), nil)
 
-	// Store each shard
+	// Store each shard with tier-based redundant copies
 	for i, shard := range mixedShards {
-		// #68 iota.SubmitMessage - Submits IOTA message
+		// #68 iota.SubmitMessage - Submits IOTA message (primary copy)
 		stepStart = time.Now()
 		if err := s.storeEncryptedMixedShardAtIndex(assetID, uint32(i), shard); err != nil {
 			log.LogStepWithDuration(logging.PhaseNetworkSubmission, "iota.SubmitMessage",
@@ -694,6 +713,26 @@ func (s *Service) LockAsset(ctx context.Context, req *LockAssetRequest) (*LockAs
 		}
 		log.LogStepWithDuration(logging.PhaseNetworkSubmission, "iota.SubmitMessage",
 			fmt.Sprintf("messageID=shard_%d", i), time.Since(stepStart), nil)
+
+		// Store redundant copies (ShardCopies - 1 additional copies)
+		for copyNum := 1; copyNum < tierCaps.ShardCopies; copyNum++ {
+			copyKey := fmt.Sprintf("mixedshard_%s_%d_copy%d", assetID, i, copyNum)
+			value, err := s.serializeMixedShardV2(shard, uint32(i))
+			if err != nil {
+				return nil, fmt.Errorf("failed to serialize shard copy %d/%d: %w", i, copyNum, err)
+			}
+			var storeErr error
+			if s.storageManager != nil {
+				storeErr = s.storageManager.StoreShard(copyKey, value)
+			} else {
+				storeErr = s.storage.UTXOStore().Set([]byte(copyKey), value)
+			}
+			if storeErr != nil {
+				log.LogStepWithDuration(logging.PhaseNetworkSubmission, "store_redundant_copy",
+					fmt.Sprintf("shardIndex=%d, copy=%d, FAIL", i, copyNum), time.Since(stepStart), storeErr)
+				return nil, fmt.Errorf("failed to store redundant shard copy %d/%d: %w", i, copyNum, storeErr)
+			}
+		}
 	}
 
 	// =========================================================================
