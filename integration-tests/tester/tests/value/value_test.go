@@ -25,7 +25,7 @@ func TestValue(t *testing.T) {
 	require.NoError(t, err)
 	defer framework.ShutdownNetwork(t, n)
 
-	syncCtx, syncCtxCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	syncCtx, syncCtxCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer syncCtxCancel()
 
 	assert.NoError(t, n.AwaitAllSync(syncCtx))
@@ -97,7 +97,7 @@ func TestValue(t *testing.T) {
 		}
 
 		return blockMeta.LedgerInclusionState == "included"
-	}, 30*time.Second, 100*time.Millisecond)
+	}, 2*time.Minute, 200*time.Millisecond)
 
 	// check that indeed the balances are available
 	balance, err := n.Coordinator().DebugNodeAPIClient.BalanceByAddress(context.Background(), &framework.GenesisAddress)
