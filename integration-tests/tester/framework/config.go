@@ -71,6 +71,7 @@ func DefaultConfig() *AppConfig {
 			fmt.Sprintf("lockbox-testing-assets:%s:rw", assetsDir),
 		},
 		Network:     DefaultNetworkConfig(),
+		Database:    DefaultDatabaseConfig(),
 		Snapshot:    DefaultSnapshotConfig(),
 		Protocol:    DefaultProtocolConfig(),
 		DAG:         DefaultDAGConfig(),
@@ -206,6 +207,8 @@ type AppConfig struct {
 	ExposedPorts nat.PortSet
 	// Network config.
 	Network NetworkConfig
+	// Database config.
+	Database DatabaseConfig
 	// Web API config.
 	RestAPI RestAPIConfig
 	// INX config.
@@ -243,6 +246,7 @@ func (cfg *AppConfig) WithReceipts() {
 func (cfg *AppConfig) CLIFlags() []string {
 	var cliFlags []string
 	cliFlags = append(cliFlags, cfg.Network.CLIFlags()...)
+	cliFlags = append(cliFlags, cfg.Database.CLIFlags()...)
 	cliFlags = append(cliFlags, cfg.Snapshot.CLIFlags()...)
 	cliFlags = append(cliFlags, cfg.Protocol.CLIFlags()...)
 	cliFlags = append(cliFlags, cfg.DAG.CLIFlags()...)
@@ -253,6 +257,26 @@ func (cfg *AppConfig) CLIFlags() []string {
 	cliFlags = append(cliFlags, cfg.Autopeering.CLIFlags()...)
 
 	return cliFlags
+}
+
+// DatabaseConfig defines database specific configuration.
+type DatabaseConfig struct {
+	// Engine defines the database engine (pebble/rocksdb/mapdb).
+	Engine string
+}
+
+// CLIFlags returns the config as CLI flags.
+func (dbConfig *DatabaseConfig) CLIFlags() []string {
+	return []string{
+		fmt.Sprintf("--%s=%s", "db.engine", dbConfig.Engine),
+	}
+}
+
+// DefaultDatabaseConfig returns the default database config.
+func DefaultDatabaseConfig() DatabaseConfig {
+	return DatabaseConfig{
+		Engine: "mapdb",
+	}
 }
 
 // NetworkConfig defines the network specific configuration.
