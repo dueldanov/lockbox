@@ -20,6 +20,10 @@ fi
 docker pull iotaledger/inx-coordinator:1.0-rc
 docker pull iotaledger/inx-indexer:1.0-rc
 
+echo "Ensure shared Docker volumes"
+docker volume create lockbox-testing-cache >/dev/null
+docker volume create lockbox-testing-assets >/dev/null
+
 echo "Run integration tests"
 for name in $TEST_NAMES; do
   echo "Run ${name}"

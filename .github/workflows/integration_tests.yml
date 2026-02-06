@@ -50,6 +50,11 @@ jobs:
           docker pull iotaledger/inx-coordinator:1.0-rc
           docker pull iotaledger/inx-indexer:1.0-rc
 
+      - name: Ensure shared test volumes
+        run: |
+          docker volume create lockbox-testing-cache
+          docker volume create lockbox-testing-assets
+
       - name: Run integration test (${{ matrix.test_name }})
         run: |
           TEST_NAME="${TEST_NAME}" docker compose \

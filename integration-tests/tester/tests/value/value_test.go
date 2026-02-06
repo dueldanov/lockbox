@@ -126,14 +126,14 @@ func fetchParents(t *testing.T, coordinator *framework.DebugNodeAPIClient, nodes
 	require.NotNil(t, coordinator)
 	require.NotEmpty(t, nodes)
 
-	parents, err := fetchParentsFromMilestones(coordinator, 90*time.Second, 250*time.Millisecond)
+	parents, err := fetchParentsFromMilestones(coordinator, 20*time.Second, 250*time.Millisecond)
 	if err == nil {
 		return normalizeParents(t, parents)
 	}
 
 	t.Logf("milestone parent selection unavailable, falling back to tips: %v", err)
 
-	parents, err = fetchParentsFromTips(nodes, coordinator, 90*time.Second, 250*time.Millisecond)
+	parents, err = fetchParentsFromTips(nodes, coordinator, 12, 500*time.Millisecond)
 	require.NoError(t, err)
 
 	return normalizeParents(t, parents)
@@ -191,18 +191,9 @@ func fetchParentsFromMilestones(
 			continue
 		}
 
-		ctxMilestone, cancelMilestone := context.WithTimeout(context.Background(), 3*time.Second)
-		milestone, err := api.MilestoneByIndex(ctxMilestone, confirmedIndex)
-		cancelMilestone()
+		parents, err := collectConfirmedMilestoneParents(api, confirmedIndex, 12)
 		if err != nil {
-			lastErr = fmt.Errorf("fetch milestone %d failed: %w", confirmedIndex, err)
-			time.Sleep(pollInterval)
-			continue
-		}
-
-		parents := milestone.Parents.RemoveDupsAndSort()
-		if len(parents) < 3 {
-			lastErr = fmt.Errorf("confirmed milestone %d has %d parents", confirmedIndex, len(parents))
+			lastErr = err
 			time.Sleep(pollInterval)
 			continue
 		}
@@ -220,43 +211,90 @@ func fetchParentsFromMilestones(
 func fetchParentsFromTips(
 	nodes []*framework.Node,
 	coordinator *framework.DebugNodeAPIClient,
-	timeout time.Duration,
-	pollInterval time.Duration,
+	maxWarmupAttempts int,
+	settleDelay time.Duration,
 ) (iotago.BlockIDs, error) {
-	deadline := time.Now().Add(timeout)
-	const maxWarmupAttempts = 5
+	if maxWarmupAttempts <= 0 {
+		maxWarmupAttempts = 1
+	}
 
 	var lastErr error
-	warmupAttempts := 0
 
-	for time.Now().Before(deadline) {
+	for warmupAttempt := 1; warmupAttempt <= maxWarmupAttempts; warmupAttempt++ {
 		parents := collectTipsParents(nodes)
 		if len(parents) >= 3 {
 			return parents, nil
 		}
 
-		if warmupAttempts < maxWarmupAttempts {
-			warmupAttempts++
-
-			spammed, err := nodes[len(nodes)-1].Spam(1*time.Second, 2)
-			if err != nil {
-				lastErr = fmt.Errorf("warmup attempt %d failed after %d blocks: %w", warmupAttempts, spammed, err)
-			} else {
-				lastErr = fmt.Errorf("only %d tips after warmup attempt %d (spammed=%d)", len(parents), warmupAttempts, spammed)
-			}
+		spammed, err := nodes[len(nodes)-1].Spam(1500*time.Millisecond, 3)
+		if err != nil {
+			lastErr = fmt.Errorf("warmup attempt %d failed after %d blocks: %w", warmupAttempt, spammed, err)
 		} else {
-			lastErr = fmt.Errorf("only %d tips after %d warmup attempts", len(parents), warmupAttempts)
+			lastErr = fmt.Errorf("only %d tips after warmup attempt %d (spammed=%d)", len(parents), warmupAttempt, spammed)
 		}
 
-		time.Sleep(pollInterval)
+		time.Sleep(settleDelay)
+	}
+
+	parents := collectTipsParents(nodes)
+	if len(parents) >= 3 {
+		return parents, nil
 	}
 
 	diag := collectParentDiagnostics(nodes, coordinator)
 	if lastErr == nil {
-		lastErr = errors.New("timed out waiting for at least 3 tips")
+		lastErr = errors.New("unable to reach 3 tips after warmup attempts")
 	}
 
 	return nil, fmt.Errorf("%w; %s", lastErr, diag)
+}
+
+func collectConfirmedMilestoneParents(
+	api *framework.DebugNodeAPIClient,
+	confirmedIndex iotago.MilestoneIndex,
+	maxMilestones int,
+) (iotago.BlockIDs, error) {
+	if maxMilestones <= 0 {
+		maxMilestones = 1
+	}
+
+	seen := make(map[iotago.BlockID]struct{})
+	checked := 0
+
+	for index := confirmedIndex; index > 0 && checked < maxMilestones; index-- {
+		ctxMilestone, cancelMilestone := context.WithTimeout(context.Background(), 3*time.Second)
+		milestone, err := api.MilestoneByIndex(ctxMilestone, index)
+		cancelMilestone()
+		if err != nil {
+			return nil, fmt.Errorf("fetch milestone %d failed: %w", index, err)
+		}
+
+		checked++
+		for _, parent := range milestone.Parents {
+			seen[parent] = struct{}{}
+		}
+
+		if len(seen) >= 3 {
+			break
+		}
+	}
+
+	parents := make(iotago.BlockIDs, 0, len(seen))
+	for parent := range seen {
+		parents = append(parents, parent)
+	}
+
+	parents = parents.RemoveDupsAndSort()
+	if len(parents) < 3 {
+		return nil, fmt.Errorf(
+			"confirmed milestone %d yielded only %d unique parents across %d milestones",
+			confirmedIndex,
+			len(parents),
+			checked,
+		)
+	}
+
+	return parents, nil
 }
 
 func normalizeParents(t *testing.T, parents iotago.BlockIDs) iotago.BlockIDs {

@@ -1,5 +1,3 @@
-version: "3.5"
-
 services:
   tester:
     container_name: tester
@@ -18,6 +16,8 @@ services:
 
 volumes:
   lockbox-testing-cache:
+    external: true
     name: lockbox-testing-cache
   lockbox-testing-assets:
+    external: true
     name: lockbox-testing-assets
