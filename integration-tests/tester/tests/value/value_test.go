@@ -4,7 +4,10 @@ package value_test
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
+	"fmt"
 	"log"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,7 +36,7 @@ func TestValue(t *testing.T) {
 	infoRes, err := n.Coordinator().DebugNodeAPIClient.Info(context.Background())
 	require.NoError(t, err)
 	protoParams := &infoRes.Protocol
-	parents := fetchTipsParents(t, n.Nodes)
+	parents := fetchParents(t, n.Coordinator().DebugNodeAPIClient, n.Nodes)
 
 	// create two targets
 	target1 := ed25519.NewKeyFromSeed(tpkg.RandSeed())
@@ -118,34 +121,22 @@ func TestValue(t *testing.T) {
 	require.True(t, outputMetadata.Spent)
 }
 
-func fetchTipsParents(t *testing.T, nodes []*framework.Node) iotago.BlockIDs {
+func fetchParents(t *testing.T, coordinator *framework.DebugNodeAPIClient, nodes []*framework.Node) iotago.BlockIDs {
 	t.Helper()
+	require.NotNil(t, coordinator)
 	require.NotEmpty(t, nodes)
 
-	var parents iotago.BlockIDs
-	warmupTriggered := false
-	require.Eventually(t, func() bool {
-		parents = collectTipsParents(nodes)
-		if len(parents) >= 3 {
-			return true
-		}
-
-		// Force short fanout if the network has not naturally produced enough tips.
-		if !warmupTriggered {
-			warmupTriggered = true
-			_, _ = nodes[len(nodes)-1].Spam(2*time.Second, 4)
-			parents = collectTipsParents(nodes)
-		}
-
-		return len(parents) >= 3
-	}, 60*time.Second, 200*time.Millisecond)
-
-	if len(parents) > 3 {
-		parents = parents[:3]
+	parents, err := fetchParentsFromMilestones(coordinator, 90*time.Second, 250*time.Millisecond)
+	if err == nil {
+		return normalizeParents(t, parents)
 	}
-	require.Len(t, parents, 3)
 
-	return parents
+	t.Logf("milestone parent selection unavailable, falling back to tips: %v", err)
+
+	parents, err = fetchParentsFromTips(nodes, coordinator, 90*time.Second, 250*time.Millisecond)
+	require.NoError(t, err)
+
+	return normalizeParents(t, parents)
 }
 
 func collectTipsParents(nodes []*framework.Node) iotago.BlockIDs {
@@ -173,4 +164,162 @@ func collectTipsParents(nodes []*framework.Node) iotago.BlockIDs {
 	}
 
 	return parents.RemoveDupsAndSort()
+}
+
+func fetchParentsFromMilestones(
+	api *framework.DebugNodeAPIClient,
+	timeout time.Duration,
+	pollInterval time.Duration,
+) (iotago.BlockIDs, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+
+	for time.Now().Before(deadline) {
+		ctxInfo, cancelInfo := context.WithTimeout(context.Background(), 3*time.Second)
+		info, err := api.Info(ctxInfo)
+		cancelInfo()
+		if err != nil {
+			lastErr = fmt.Errorf("info request failed: %w", err)
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		confirmedIndex := info.Status.ConfirmedMilestone.Index
+		if confirmedIndex == 0 {
+			lastErr = errors.New("confirmed milestone index is 0")
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		ctxMilestone, cancelMilestone := context.WithTimeout(context.Background(), 3*time.Second)
+		milestone, err := api.MilestoneByIndex(ctxMilestone, confirmedIndex)
+		cancelMilestone()
+		if err != nil {
+			lastErr = fmt.Errorf("fetch milestone %d failed: %w", confirmedIndex, err)
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		parents := milestone.Parents.RemoveDupsAndSort()
+		if len(parents) < 3 {
+			lastErr = fmt.Errorf("confirmed milestone %d has %d parents", confirmedIndex, len(parents))
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		return parents, nil
+	}
+
+	if lastErr == nil {
+		lastErr = errors.New("timed out waiting for confirmed milestone parents")
+	}
+
+	return nil, lastErr
+}
+
+func fetchParentsFromTips(
+	nodes []*framework.Node,
+	coordinator *framework.DebugNodeAPIClient,
+	timeout time.Duration,
+	pollInterval time.Duration,
+) (iotago.BlockIDs, error) {
+	deadline := time.Now().Add(timeout)
+	const maxWarmupAttempts = 5
+
+	var lastErr error
+	warmupAttempts := 0
+
+	for time.Now().Before(deadline) {
+		parents := collectTipsParents(nodes)
+		if len(parents) >= 3 {
+			return parents, nil
+		}
+
+		if warmupAttempts < maxWarmupAttempts {
+			warmupAttempts++
+
+			spammed, err := nodes[len(nodes)-1].Spam(1*time.Second, 2)
+			if err != nil {
+				lastErr = fmt.Errorf("warmup attempt %d failed after %d blocks: %w", warmupAttempts, spammed, err)
+			} else {
+				lastErr = fmt.Errorf("only %d tips after warmup attempt %d (spammed=%d)", len(parents), warmupAttempts, spammed)
+			}
+		} else {
+			lastErr = fmt.Errorf("only %d tips after %d warmup attempts", len(parents), warmupAttempts)
+		}
+
+		time.Sleep(pollInterval)
+	}
+
+	diag := collectParentDiagnostics(nodes, coordinator)
+	if lastErr == nil {
+		lastErr = errors.New("timed out waiting for at least 3 tips")
+	}
+
+	return nil, fmt.Errorf("%w; %s", lastErr, diag)
+}
+
+func normalizeParents(t *testing.T, parents iotago.BlockIDs) iotago.BlockIDs {
+	t.Helper()
+
+	parents = parents.RemoveDupsAndSort()
+	if len(parents) > 3 {
+		parents = parents[:3]
+	}
+	require.Len(t, parents, 3)
+
+	return parents
+}
+
+func collectParentDiagnostics(nodes []*framework.Node, coordinator *framework.DebugNodeAPIClient) string {
+	var builder strings.Builder
+	builder.WriteString("parent acquisition diagnostics")
+
+	for i, node := range nodes {
+		builder.WriteString(fmt.Sprintf("; node[%d]=%s", i, node.Name))
+
+		ctxInfo, cancelInfo := context.WithTimeout(context.Background(), 2*time.Second)
+		info, infoErr := node.DebugNodeAPIClient.Info(ctxInfo)
+		cancelInfo()
+		if infoErr != nil {
+			builder.WriteString(fmt.Sprintf(" info_err=%q", infoErr.Error()))
+		} else {
+			builder.WriteString(fmt.Sprintf(
+				" healthy=%t latest_ms=%d confirmed_ms=%d",
+				info.Status.IsHealthy,
+				info.Status.LatestMilestone.Index,
+				info.Status.ConfirmedMilestone.Index,
+			))
+		}
+
+		ctxTips, cancelTips := context.WithTimeout(context.Background(), 2*time.Second)
+		tipsRes, tipsErr := node.DebugNodeAPIClient.Tips(ctxTips)
+		cancelTips()
+		if tipsErr != nil {
+			builder.WriteString(fmt.Sprintf(" tips_err=%q", tipsErr.Error()))
+			continue
+		}
+
+		tips, tipsParseErr := tipsRes.Tips()
+		if tipsParseErr != nil {
+			builder.WriteString(fmt.Sprintf(" tips_parse_err=%q", tipsParseErr.Error()))
+			continue
+		}
+		builder.WriteString(fmt.Sprintf(" tips_count=%d", len(tips.RemoveDupsAndSort())))
+	}
+
+	ctxCooInfo, cancelCooInfo := context.WithTimeout(context.Background(), 2*time.Second)
+	cooInfo, cooInfoErr := coordinator.Info(ctxCooInfo)
+	cancelCooInfo()
+	if cooInfoErr != nil {
+		builder.WriteString(fmt.Sprintf("; coordinator_info_err=%q", cooInfoErr.Error()))
+	} else {
+		builder.WriteString(fmt.Sprintf(
+			"; coordinator_latest_ms=%d coordinator_confirmed_ms=%d",
+			cooInfo.Status.LatestMilestone.Index,
+			cooInfo.Status.ConfirmedMilestone.Index,
+		))
+	}
+
+	return builder.String()
 }
