@@ -238,31 +238,30 @@ func TestCheckTokenNonce_ReplayAttack(t *testing.T) {
 	require.False(t, result2, "Replay of nonce should be rejected")
 }
 
-func TestCheckTokenNonce_LegacyFormat(t *testing.T) {
+func TestCheckTokenNonce_LegacyFormatRejected(t *testing.T) {
 	svc := &Service{}
-	// Legacy nonce without timestamp (at least 16 chars)
-	// Use random suffix to avoid collision with persisted nonces
+	// Legacy nonce without timestamp should be rejected (fail-closed).
 	randomBytes := make([]byte, 8)
 	rand.Read(randomBytes)
 	nonce := fmt.Sprintf("legacy_nonce_%x", randomBytes)
 	result := svc.checkTokenNonce(nonce)
-	require.True(t, result, "Legacy nonce with sufficient length should be accepted")
+	require.False(t, result, "Legacy nonce format should be rejected")
 }
 
-func TestCheckTokenNonce_LegacyReplay(t *testing.T) {
+func TestCheckTokenNonce_LegacyReplayRejected(t *testing.T) {
 	svc := &Service{}
-	// Legacy nonce with unique suffix
+	// Legacy nonce with unique suffix should still fail on first use.
 	randomBytes := make([]byte, 8)
 	rand.Read(randomBytes)
 	nonce := fmt.Sprintf("legacy_replay_%x", randomBytes)
 
-	// First use should succeed
+	// First use should fail.
 	result1 := svc.checkTokenNonce(nonce)
-	require.True(t, result1, "First use of legacy nonce should succeed")
+	require.False(t, result1, "Legacy nonce should be rejected")
 
-	// Second use should fail
+	// Second use should also fail.
 	result2 := svc.checkTokenNonce(nonce)
-	require.False(t, result2, "Replay of legacy nonce should be rejected")
+	require.False(t, result2, "Legacy nonce replay should stay rejected")
 }
 
 func TestCheckTokenNonce_ShortRandom(t *testing.T) {
@@ -272,6 +271,14 @@ func TestCheckTokenNonce_ShortRandom(t *testing.T) {
 	nonce := fmt.Sprintf("%d:short", timestamp)
 	result := svc.checkTokenNonce(nonce)
 	require.False(t, result, "Nonce with short random part should be rejected")
+}
+
+func TestCheckTokenNonce_InvalidRandomCharacters(t *testing.T) {
+	svc := &Service{}
+	timestamp := time.Now().Unix()
+	nonce := fmt.Sprintf("%d:abc1234567890|\n", timestamp)
+	result := svc.checkTokenNonce(nonce)
+	require.False(t, result, "Nonce with unsafe characters should be rejected")
 }
 
 // TestCheckTokenNonce_ConcurrentReplay tests that concurrent requests with

@@ -203,3 +203,17 @@ func setupINX(network *Network, cfg *AppConfig) error {
 
 	return nil
 }
+
+// ShouldSkipDockerIntegration reports whether integration tests should be skipped
+// because Docker is unavailable in the current environment.
+func ShouldSkipDockerIntegration(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "operation not permitted") ||
+		strings.Contains(msg, "permission denied") ||
+		strings.Contains(msg, "docker.sock") ||
+		strings.Contains(msg, "cannot connect to the docker daemon")
+}

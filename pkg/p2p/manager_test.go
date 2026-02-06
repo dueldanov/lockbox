@@ -4,6 +4,7 @@ package p2p_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,13 +17,24 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 
+	"github.com/dueldanov/lockbox/v2/pkg/p2p"
 	"github.com/iotaledger/hive.go/app/configuration"
 	appLogger "github.com/iotaledger/hive.go/app/logger"
 	"github.com/iotaledger/hive.go/logger"
-	"github.com/dueldanov/lockbox/v2/pkg/p2p"
 )
 
-func newNode(t require.TestingT) host.Host {
+func isListenPermissionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := err.Error()
+	return strings.Contains(msg, "operation not permitted") || strings.Contains(msg, "permission denied")
+}
+
+func newNode(t testing.TB) host.Host {
+	t.Helper()
+
 	// we use Ed25519 because otherwise it takes longer as the default is RSA
 	sk, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
 	require.NoError(t, err)
@@ -35,9 +47,13 @@ func newNode(t require.TestingT) host.Host {
 	require.NoError(t, err)
 
 	h, err := libp2p.New(
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 		libp2p.Identity(sk),
 		libp2p.ConnectionManager(connManager),
 	)
+	if isListenPermissionError(err) {
+		t.Skipf("Skipping libp2p test: cannot bind to loopback in this environment: %v", err)
+	}
 	require.NoError(t, err)
 
 	return h

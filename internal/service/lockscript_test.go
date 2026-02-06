@@ -23,7 +23,7 @@ func generateTestNonceLS() string {
 	timestamp := time.Now().Unix()
 	randomBytes := make([]byte, 8)
 	rand.Read(randomBytes)
-	return fmt.Sprintf("%d_%x", timestamp, randomBytes)
+	return fmt.Sprintf("%d:%x", timestamp, randomBytes)
 }
 
 // setupTestServiceWithScript creates a test service with LockScript compiler initialized

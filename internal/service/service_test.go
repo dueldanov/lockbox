@@ -28,8 +28,8 @@ type MockZKPProvider struct{}
 
 func (m *MockZKPProvider) GenerateOwnershipProof(assetID []byte, ownerSecret []byte) (*interfaces.OwnershipProof, error) {
 	return &interfaces.OwnershipProof{
-		AssetCommitment: assetID,       // Mock: use assetID as commitment
-		OwnerAddress:    ownerSecret,   // Mock: use secret as address
+		AssetCommitment: assetID,     // Mock: use assetID as commitment
+		OwnerAddress:    ownerSecret, // Mock: use secret as address
 		Timestamp:       time.Now().Unix(),
 	}, nil
 }
@@ -114,12 +114,12 @@ func TestUnlockAsset(t *testing.T) {
 }
 
 // generateTestNonce creates a valid nonce for testing.
-// Format: timestamp_random (current time + random suffix)
+// Format: timestamp:random (current time + random suffix)
 func generateTestNonce() string {
 	timestamp := time.Now().Unix()
 	randomBytes := make([]byte, 8)
 	rand.Read(randomBytes)
-	return fmt.Sprintf("%d_%x", timestamp, randomBytes)
+	return fmt.Sprintf("%d:%x", timestamp, randomBytes)
 }
 
 // TestScriptCompilation tests the compilation of a lock script.

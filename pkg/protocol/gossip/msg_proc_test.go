@@ -45,9 +45,13 @@ func TestMessageProcessorEmit(t *testing.T) {
 	require.NoError(t, err)
 
 	n, err := libp2p.New(
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 		libp2p.Identity(sk),
 		libp2p.ConnectionManager(connManager),
 	)
+	if isListenPermissionError(err) {
+		t.Skipf("Skipping gossip test: cannot bind to loopback in this environment: %v", err)
+	}
 	require.NoError(t, err)
 
 	serverMetrics := &metrics.ServerMetrics{}

@@ -176,6 +176,8 @@ unlockResp, err := svc.UnlockAsset(ctx, unlockReq)
 // Только для Standard+ тиров
 err := svc.EmergencyUnlock(
     assetID,
+    accessToken,          // HMAC token
+    nonce,                // timestamp:random (single-use)
     [][]byte{sig1, sig2}, // multi-sig
     "emergency reason",
 )

@@ -41,7 +41,8 @@ func TestMultiSig_RealSignatureVerification(t *testing.T) {
 	addresses := []iotago.Address{&addr1, &addr2}
 
 	assetID := "test-multisig-asset"
-	message := []byte(assetID)
+	nonce := "nonce-abc1234567890"
+	message := []byte(buildUnlockMultiSigMessage(assetID, nonce))
 
 	// Create REAL signatures
 	sig1 := ed25519.Sign(priv1, message)
@@ -56,7 +57,7 @@ func TestMultiSig_RealSignatureVerification(t *testing.T) {
 	signatures := [][]byte{sigData1, sigData2}
 
 	// TEST 1: Real signatures should pass
-	validCount, err := svc.verifyMultiSigSignatures(assetID, signatures, addresses)
+	validCount, err := svc.verifyMultiSigSignatures(buildUnlockMultiSigMessage(assetID, nonce), signatures, addresses)
 	require.NoError(t, err)
 	require.Equal(t, 2, validCount, "Both real signatures should be valid")
 }
@@ -74,6 +75,7 @@ func TestMultiSig_FakeSignatureMustFail(t *testing.T) {
 	addresses := []iotago.Address{&addr1}
 
 	assetID := "test-multisig-fake"
+	nonce := "nonce-abc1234567890"
 
 	// Create FAKE signature (random bytes)
 	fakeSignature := make([]byte, 64)
@@ -85,7 +87,7 @@ func TestMultiSig_FakeSignatureMustFail(t *testing.T) {
 	signatures := [][]byte{fakeSigData}
 
 	// TEST: Fake signature MUST be rejected
-	validCount, err := svc.verifyMultiSigSignatures(assetID, signatures, addresses)
+	validCount, err := svc.verifyMultiSigSignatures(buildUnlockMultiSigMessage(assetID, nonce), signatures, addresses)
 	require.NoError(t, err) // No error, but count should be 0
 	require.Equal(t, 0, validCount, "SECURITY: Fake signature MUST be rejected")
 }
@@ -105,7 +107,8 @@ func TestMultiSig_WrongKeySignatureMustFail(t *testing.T) {
 	addresses := []iotago.Address{&addr1}
 
 	assetID := "test-multisig-wrongkey"
-	message := []byte(assetID)
+	nonce := "nonce-abc1234567890"
+	message := []byte(buildUnlockMultiSigMessage(assetID, nonce))
 
 	// Sign with priv2 but claim it's from pub1
 	sig2 := ed25519.Sign(priv2, message)
@@ -116,7 +119,7 @@ func TestMultiSig_WrongKeySignatureMustFail(t *testing.T) {
 	signatures := [][]byte{sigData}
 
 	// TEST: Signature from wrong key MUST be rejected
-	validCount, err := svc.verifyMultiSigSignatures(assetID, signatures, addresses)
+	validCount, err := svc.verifyMultiSigSignatures(buildUnlockMultiSigMessage(assetID, nonce), signatures, addresses)
 	require.NoError(t, err)
 	require.Equal(t, 0, validCount, "SECURITY: Signature from wrong key MUST be rejected")
 }
@@ -133,14 +136,61 @@ func TestMultiSig_ReplayAttackMustFail(t *testing.T) {
 
 	// Sign for asset-A
 	assetA := "asset-A"
-	sigA := ed25519.Sign(priv1, []byte(assetA))
+	nonceA := "nonce-asset-a-12345678"
+	sigA := ed25519.Sign(priv1, []byte(buildUnlockMultiSigMessage(assetA, nonceA)))
 	sigDataA := append([]byte(pub1), sigA...)
 
 	// Try to use signature from asset-A on asset-B
 	assetB := "asset-B"
-	validCount, err := svc.verifyMultiSigSignatures(assetB, [][]byte{sigDataA}, addresses)
+	nonceB := "nonce-asset-b-12345678"
+	validCount, err := svc.verifyMultiSigSignatures(buildUnlockMultiSigMessage(assetB, nonceB), [][]byte{sigDataA}, addresses)
 	require.NoError(t, err)
 	require.Equal(t, 0, validCount, "SECURITY: Signature replay MUST be rejected")
+}
+
+// TestMultiSig_ReplayAcrossNonceMustFail ensures signatures are bound to nonce.
+func TestMultiSig_ReplayAcrossNonceMustFail(t *testing.T) {
+	svc := setupTestService(t)
+
+	pub1, priv1, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	addr1 := iotago.Ed25519AddressFromPubKey(pub1)
+	addresses := []iotago.Address{&addr1}
+
+	assetID := "asset-replay-nonce"
+	nonceA := "nonce-A-1234567890"
+	nonceB := "nonce-B-1234567890"
+
+	sigA := ed25519.Sign(priv1, []byte(buildUnlockMultiSigMessage(assetID, nonceA)))
+	sigDataA := append([]byte(pub1), sigA...)
+
+	validCount, err := svc.verifyMultiSigSignatures(buildUnlockMultiSigMessage(assetID, nonceB), [][]byte{sigDataA}, addresses)
+	require.NoError(t, err)
+	require.Equal(t, 0, validCount, "SECURITY: Signature replay across nonce MUST be rejected")
+}
+
+// TestMultiSig_DomainSeparation_UnlockVsEmergency ensures operation-specific signing.
+func TestMultiSig_DomainSeparation_UnlockVsEmergency(t *testing.T) {
+	svc := setupTestService(t)
+
+	pub1, priv1, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	addr1 := iotago.Ed25519AddressFromPubKey(pub1)
+	addresses := []iotago.Address{&addr1}
+
+	assetID := "asset-domain-separation"
+	nonce := "nonce-domain-1234567890"
+	emergencyNonce := "nonce-emergency-1234567890"
+	reason := "break glass"
+
+	unlockSig := ed25519.Sign(priv1, []byte(buildUnlockMultiSigMessage(assetID, nonce)))
+	sigData := append([]byte(pub1), unlockSig...)
+
+	validCount, err := svc.verifyMultiSigSignatures(buildEmergencyUnlockMultiSigMessage(assetID, emergencyNonce, reason), [][]byte{sigData}, addresses)
+	require.NoError(t, err)
+	require.Equal(t, 0, validCount, "SECURITY: unlock signature must not validate emergency unlock message")
 }
 
 // TestMultiSig_DuplicateAddressMustFail tests that same address can't sign twice.
@@ -154,7 +204,8 @@ func TestMultiSig_DuplicateAddressMustFail(t *testing.T) {
 	addresses := []iotago.Address{&addr1}
 
 	assetID := "test-duplicate"
-	message := []byte(assetID)
+	nonce := "nonce-dup-1234567890"
+	message := []byte(buildUnlockMultiSigMessage(assetID, nonce))
 
 	// Create same signature twice
 	sig := ed25519.Sign(priv1, message)
@@ -163,7 +214,7 @@ func TestMultiSig_DuplicateAddressMustFail(t *testing.T) {
 	signatures := [][]byte{sigData, sigData} // Same signature twice!
 
 	// Should only count once
-	validCount, err := svc.verifyMultiSigSignatures(assetID, signatures, addresses)
+	validCount, err := svc.verifyMultiSigSignatures(buildUnlockMultiSigMessage(assetID, nonce), signatures, addresses)
 	require.NoError(t, err)
 	require.Equal(t, 1, validCount, "Duplicate address should only count once")
 }

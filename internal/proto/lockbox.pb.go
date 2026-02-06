@@ -762,8 +762,12 @@ type EmergencyUnlockRequest struct {
 	AssetId             string                 `protobuf:"bytes,1,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
 	Reason              string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
 	EmergencySignatures [][]byte               `protobuf:"bytes,3,rep,name=emergency_signatures,json=emergencySignatures,proto3" json:"emergency_signatures,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// SECURITY: Required for authentication
+	AccessToken string `protobuf:"bytes,4,opt,name=access_token,json=accessToken,proto3" json:"access_token,omitempty"`
+	// SECURITY: Required for replay protection (single-use nonce)
+	Nonce         string `protobuf:"bytes,5,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EmergencyUnlockRequest) Reset() {
@@ -815,6 +819,20 @@ func (x *EmergencyUnlockRequest) GetEmergencySignatures() [][]byte {
 		return x.EmergencySignatures
 	}
 	return nil
+}
+
+func (x *EmergencyUnlockRequest) GetAccessToken() string {
+	if x != nil {
+		return x.AccessToken
+	}
+	return ""
+}
+
+func (x *EmergencyUnlockRequest) GetNonce() string {
+	if x != nil {
+		return x.Nonce
+	}
+	return ""
 }
 
 type EmergencyUnlockResponse struct {
@@ -1126,11 +1144,13 @@ const file_lockbox_proto_rawDesc = "" +
 	"\x16CreateMultiSigResponse\x12 \n" +
 	"\fmulti_sig_id\x18\x01 \x01(\tR\n" +
 	"multiSigId\x12\x18\n" +
-	"\aaddress\x18\x02 \x01(\tR\aaddress\"~\n" +
+	"\aaddress\x18\x02 \x01(\tR\aaddress\"\xb7\x01\n" +
 	"\x16EmergencyUnlockRequest\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x121\n" +
-	"\x14emergency_signatures\x18\x03 \x03(\fR\x13emergencySignatures\"m\n" +
+	"\x14emergency_signatures\x18\x03 \x03(\fR\x13emergencySignatures\x12!\n" +
+	"\faccess_token\x18\x04 \x01(\tR\vaccessToken\x12\x14\n" +
+	"\x05nonce\x18\x05 \x01(\tR\x05nonce\"m\n" +
 	"\x17EmergencyUnlockResponse\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x1f\n" +

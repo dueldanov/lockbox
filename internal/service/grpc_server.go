@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -203,7 +204,7 @@ func (s *GRPCServer) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to listen: %w", err)
 	}
-	
+
 	return s.grpcServer.Serve(listener)
 }
 
@@ -218,14 +219,14 @@ func (s *GRPCServer) LockAsset(ctx context.Context, req *pb.LockAssetRequest) (*
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid owner address: %v", err)
 	}
-	
+
 	// Parse output ID
 	var outputID iotago.OutputID
 	if len(req.OutputId) != iotago.OutputIDLength {
 		return nil, status.Error(codes.InvalidArgument, "invalid output ID length")
 	}
 	copy(outputID[:], req.OutputId)
-	
+
 	// Parse multi-sig addresses if provided
 	var multiSigAddresses []iotago.Address
 	for _, addrStr := range req.MultiSigAddresses {
@@ -235,7 +236,7 @@ func (s *GRPCServer) LockAsset(ctx context.Context, req *pb.LockAssetRequest) (*
 		}
 		multiSigAddresses = append(multiSigAddresses, addr)
 	}
-	
+
 	// Create service request
 	serviceReq := &LockAssetRequest{
 		OwnerAddress:      ownerAddr,
@@ -245,13 +246,13 @@ func (s *GRPCServer) LockAsset(ctx context.Context, req *pb.LockAssetRequest) (*
 		MultiSigAddresses: multiSigAddresses,
 		MinSignatures:     int(req.MinSignatures),
 	}
-	
+
 	// Call service
 	resp, err := s.service.LockAsset(ctx, serviceReq)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to lock asset: %v", err)
 	}
-	
+
 	// Convert response
 	return &pb.LockAssetResponse{
 		AssetId:    resp.AssetID,
@@ -327,7 +328,7 @@ func (s *GRPCServer) GetAssetStatus(ctx context.Context, req *pb.GetAssetStatusR
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "asset not found: %v", err)
 	}
-	
+
 	return &pb.GetAssetStatusResponse{
 		AssetId:      asset.ID,
 		Status:       string(asset.Status),
@@ -349,13 +350,13 @@ func (s *GRPCServer) ListAssets(req *pb.ListAssetsRequest, stream pb.LockBoxServ
 		}
 		ownerAddr = addr
 	}
-	
+
 	// Get assets from service
 	assets, err := s.service.ListAssets(ownerAddr, AssetStatus(req.Status))
 	if err != nil {
 		return status.Errorf(codes.Internal, "failed to list assets: %v", err)
 	}
-	
+
 	// Stream assets
 	for _, asset := range assets {
 		pbAsset := &pb.AssetInfo{
@@ -365,16 +366,16 @@ func (s *GRPCServer) ListAssets(req *pb.ListAssetsRequest, stream pb.LockBoxServ
 			UnlockTime: asset.UnlockTime.Unix(),
 			Amount:     asset.Amount,
 		}
-		
+
 		resp := &pb.ListAssetsResponse{
 			Assets: []*pb.AssetInfo{pbAsset},
 		}
-		
+
 		if err := stream.Send(resp); err != nil {
 			return err
 		}
 	}
-	
+
 	return nil
 }
 
@@ -412,9 +413,25 @@ func (s *GRPCServer) CreateMultiSig(ctx context.Context, req *pb.CreateMultiSigR
 
 // EmergencyUnlock implements the gRPC method
 func (s *GRPCServer) EmergencyUnlock(ctx context.Context, req *pb.EmergencyUnlockRequest) (*pb.EmergencyUnlockResponse, error) {
-	err := s.service.EmergencyUnlock(req.AssetId, req.EmergencySignatures, req.Reason)
+	if req.AssetId == "" {
+		return nil, status.Error(codes.InvalidArgument, "asset_id is required")
+	}
+	if req.AccessToken == "" {
+		return nil, status.Error(codes.InvalidArgument, "access_token is required")
+	}
+	if req.Nonce == "" {
+		return nil, status.Error(codes.InvalidArgument, "nonce is required for replay protection")
+	}
+	if strings.TrimSpace(req.Reason) == "" {
+		return nil, status.Error(codes.InvalidArgument, "reason is required")
+	}
+	if len(req.EmergencySignatures) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "at least one emergency signature is required")
+	}
+
+	err := s.service.EmergencyUnlock(req.AssetId, req.AccessToken, req.Nonce, req.EmergencySignatures, req.Reason)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to emergency unlock: %v", err)
+		return nil, status.Errorf(codes.PermissionDenied, "failed to emergency unlock: %v", err)
 	}
 
 	// Get updated asset status
@@ -433,9 +450,9 @@ func (s *GRPCServer) EmergencyUnlock(ctx context.Context, req *pb.EmergencyUnloc
 // GetServiceInfo implements the gRPC method
 func (s *GRPCServer) GetServiceInfo(ctx context.Context, req *pb.GetServiceInfoRequest) (*pb.GetServiceInfoResponse, error) {
 	return &pb.GetServiceInfoResponse{
-		Version:      "1.0.0",
-		Tier:         s.service.config.Tier.String(),
-		MaxLockTime:  int64(s.service.config.MaxLockPeriod.Seconds()),
+		Version:     "1.0.0",
+		Tier:        s.service.config.Tier.String(),
+		MaxLockTime: int64(s.service.config.MaxLockPeriod.Seconds()),
 		Features: &pb.ServiceFeatures{
 			MultiSigSupport:      s.service.config.MultiSigRequired,
 			EmergencyUnlock:      s.service.config.EnableEmergencyUnlock,

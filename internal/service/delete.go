@@ -184,6 +184,7 @@ func (s *Service) DeleteKey(ctx context.Context, req *DeleteKeyRequest) (*Delete
 	}
 
 	var stepStart time.Time
+	var asset *LockedAsset
 
 	// ==========================================================================
 	// Phase 1: Request Initialization & Token Validation (8 functions: 1-8)
@@ -259,6 +260,21 @@ func (s *Service) DeleteKey(ctx context.Context, req *DeleteKeyRequest) (*Delete
 
 	// #9: verify_ownership
 	stepStart = time.Now()
+	loadedAsset, exists := s.lockedAssets[req.BundleID]
+	if !exists {
+		log.LogStepWithDuration(logging.PhaseOwnership, "verify_ownership",
+			"verification_started=false, found=false", time.Since(stepStart), fmt.Errorf("bundle not found"))
+		return nil, fmt.Errorf("bundle not found: %s", req.BundleID)
+	}
+	asset = loadedAsset
+
+	signingMessage := buildDeleteKeyMultiSigMessage(req.BundleID, req.Nonce)
+	if err := s.verifyKeyOperationAuthorization("delete", signingMessage, req.Signatures, asset); err != nil {
+		log.LogStepWithDuration(logging.PhaseOwnership, "verify_ownership",
+			"verification_started=false, auth=false", time.Since(stepStart), err)
+		return nil, fmt.Errorf("delete authorization failed: %w", err)
+	}
+
 	log.LogStepWithDuration(logging.PhaseOwnership, "verify_ownership",
 		"verification_started=true", time.Since(stepStart), nil)
 
@@ -303,12 +319,6 @@ func (s *Service) DeleteKey(ctx context.Context, req *DeleteKeyRequest) (*Delete
 
 	// #19: fetch_shards
 	stepStart = time.Now()
-	asset, exists := s.lockedAssets[req.BundleID]
-	if !exists {
-		log.LogStepWithDuration(logging.PhaseShardEnumeration, "fetch_shards",
-			"shard_count=0, found=false", time.Since(stepStart), fmt.Errorf("bundle not found"))
-		return nil, fmt.Errorf("bundle not found: %s", req.BundleID)
-	}
 	shardCount := asset.ShardCount
 	if shardCount == 0 {
 		shardCount = 5 // Default shard count if not set
@@ -728,16 +738,8 @@ func (s *Service) checkTokenNonce(nonce string) bool {
 	// Parse nonce format: "timestamp:random" (inside lock)
 	parts := strings.SplitN(nonce, ":", 2)
 	if len(parts) != 2 {
-		// Invalid format - still allow for backward compatibility
-		// but require minimum length for security
-		if len(nonce) < 16 {
-			return false
-		}
-		// Legacy nonce - mark and return (inside lock)
-		expiry := time.Now().Add(nonceWindow * 2)
-		usedNonces[nonce] = expiry
-		saveNonceToFile(nonce, expiry)
-		return true
+		// Fail-closed: accept only strict timestamped nonce format.
+		return false
 	}
 
 	// Parse timestamp (inside lock)
@@ -755,8 +757,8 @@ func (s *Service) checkTokenNonce(nonce string) bool {
 		return false // Nonce from the future (allow 60s clock skew)
 	}
 
-	// Check random part has sufficient entropy
-	if len(parts[1]) < 16 {
+	// Check random part has sufficient entropy and safe format.
+	if !isValidNonceRandomPart(parts[1]) {
 		return false
 	}
 
@@ -765,6 +767,19 @@ func (s *Service) checkTokenNonce(nonce string) bool {
 	usedNonces[nonce] = expiry
 	saveNonceToFile(nonce, expiry)
 
+	return true
+}
+
+func isValidNonceRandomPart(part string) bool {
+	if len(part) < 16 || len(part) > 128 {
+		return false
+	}
+	for _, ch := range part {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' {
+			continue
+		}
+		return false
+	}
 	return true
 }
 

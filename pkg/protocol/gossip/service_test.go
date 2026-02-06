@@ -4,6 +4,7 @@ package gossip_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,16 +16,25 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/stretchr/testify/require"
 
+	"github.com/dueldanov/lockbox/v2/pkg/metrics"
+	"github.com/dueldanov/lockbox/v2/pkg/p2p"
+	"github.com/dueldanov/lockbox/v2/pkg/protocol/gossip"
 	"github.com/iotaledger/hive.go/app/configuration"
 	appLogger "github.com/iotaledger/hive.go/app/logger"
 	hivep2p "github.com/iotaledger/hive.go/crypto/p2p"
 	"github.com/iotaledger/hive.go/logger"
-	"github.com/dueldanov/lockbox/v2/pkg/metrics"
-	"github.com/dueldanov/lockbox/v2/pkg/p2p"
-	"github.com/dueldanov/lockbox/v2/pkg/protocol/gossip"
 )
 
 const protocolID = "/iota/abcdf/1.0.0"
+
+func isListenPermissionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := err.Error()
+	return strings.Contains(msg, "operation not permitted") || strings.Contains(msg, "permission denied")
+}
 
 func newNode(ctx context.Context, name string, t *testing.T, mngOpts []p2p.ManagerOption, srvOpts []gossip.ServiceOption, privateKey crypto.PrivKey) (
 	host.Host, *p2p.Manager, *gossip.Service, peer.AddrInfo,
@@ -38,11 +48,14 @@ func newNode(ctx context.Context, name string, t *testing.T, mngOpts []p2p.Manag
 
 	//nolint:contextcheck // false positive
 	n, err := libp2p.New(
-		libp2p.DefaultListenAddrs,
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 		libp2p.Identity(privateKey),
 		libp2p.ConnectionManager(connManager),
 		libp2p.Transport(tcp.NewTCPTransport),
 	)
+	if isListenPermissionError(err) {
+		t.Skipf("Skipping gossip test: cannot bind to loopback in this environment: %v", err)
+	}
 	require.NoError(t, err)
 
 	serverMetrics := &metrics.ServerMetrics{}

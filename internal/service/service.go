@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -1361,7 +1362,8 @@ func (s *Service) UnlockAsset(ctx context.Context, req *UnlockAssetRequest) (*Un
 	// SECURITY: Multi-sig verification (deferred from Phase 4)
 	stepStart = time.Now()
 	if asset.MinSignatures > 0 && len(asset.MultiSigAddresses) > 0 {
-		validSigs, err := s.verifyMultiSigSignatures(req.AssetID, req.Signatures, asset.MultiSigAddresses)
+		signingMessage := buildUnlockMultiSigMessage(req.AssetID, req.Nonce)
+		validSigs, err := s.verifyMultiSigSignatures(signingMessage, req.Signatures, asset.MultiSigAddresses)
 		if err != nil {
 			log.LogStepWithDuration(logging.PhaseMultiSig, "verify_multisig_signatures",
 				fmt.Sprintf("verificationError=%v", err), time.Since(stepStart), err)
@@ -2794,9 +2796,16 @@ func (s *Service) GetRetrievalFee(ctx context.Context, assetID string, currency 
 	return calc.CalculateRetrievalFee(s.config.Tier, storedValueUSD, currency)
 }
 
-// EmergencyUnlock initiates an emergency unlock for an asset
-// Requires multi-sig approval if configured, and applies delay from config
-func (s *Service) EmergencyUnlock(assetID string, signatures [][]byte, reason string) error {
+// EmergencyUnlock initiates an emergency unlock for an asset.
+// Requires authenticated request (access token + nonce) and signatures.
+func (s *Service) EmergencyUnlock(assetID string, accessToken string, nonce string, signatures [][]byte, reason string) error {
+	if !s.validateAccessToken(accessToken) {
+		return ErrUnauthorized
+	}
+	if !s.checkTokenNonce(nonce) {
+		return ErrNonceInvalid
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -2810,7 +2819,13 @@ func (s *Service) EmergencyUnlock(assetID string, signatures [][]byte, reason st
 		return fmt.Errorf("emergency unlock not enabled for this tier")
 	}
 
-	// Check multi-sig signatures if required
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return fmt.Errorf("emergency unlock reason is required")
+	}
+	signingMessage := buildEmergencyUnlockMultiSigMessage(assetID, nonce, reason)
+
+	// Check multi-sig signatures if required.
 	if len(asset.MultiSigAddresses) > 0 && asset.MinSignatures > 0 {
 		if len(signatures) < asset.MinSignatures {
 			return fmt.Errorf("insufficient signatures: need %d, got %d",
@@ -2819,13 +2834,29 @@ func (s *Service) EmergencyUnlock(assetID string, signatures [][]byte, reason st
 
 		// Verify each signature against MultiSigAddresses
 		// Each signature is 96 bytes: pubKey (32) + signature (64)
-		validSigs, err := s.verifyMultiSigSignatures(assetID, signatures, asset.MultiSigAddresses)
+		validSigs, err := s.verifyMultiSigSignatures(signingMessage, signatures, asset.MultiSigAddresses)
 		if err != nil {
 			return fmt.Errorf("multi-sig verification failed: %w", err)
 		}
 		if validSigs < asset.MinSignatures {
 			return fmt.Errorf("insufficient valid signatures: need %d, got %d",
 				asset.MinSignatures, validSigs)
+		}
+	} else {
+		// Fail-closed: emergency unlock for non-multisig assets still requires
+		// at least one owner signature, otherwise any caller can trigger it.
+		if asset.OwnerAddress == nil {
+			return fmt.Errorf("asset owner address is missing")
+		}
+		if len(signatures) == 0 {
+			return fmt.Errorf("owner signature is required for emergency unlock")
+		}
+		validSigs, err := s.verifyMultiSigSignatures(signingMessage, signatures, []iotago.Address{asset.OwnerAddress})
+		if err != nil {
+			return fmt.Errorf("owner signature verification failed: %w", err)
+		}
+		if validSigs < 1 {
+			return fmt.Errorf("owner signature verification failed: no valid signatures")
 		}
 	}
 
@@ -2955,11 +2986,28 @@ func (s *Service) VerifyAsset(ctx context.Context, assetID string, requester iot
 	return s.verifier.VerifyAsset(ctx, req)
 }
 
+func buildUnlockMultiSigMessage(assetID, nonce string) string {
+	return fmt.Sprintf("lockbox:unlock:v1:%s:%s", assetID, nonce)
+}
+
+func buildRotateKeyMultiSigMessage(bundleID, nonce string) string {
+	return fmt.Sprintf("lockbox:rotate:v1:%s:%s", bundleID, nonce)
+}
+
+func buildDeleteKeyMultiSigMessage(bundleID, nonce string) string {
+	return fmt.Sprintf("lockbox:delete:v1:%s:%s", bundleID, nonce)
+}
+
+func buildEmergencyUnlockMultiSigMessage(assetID, nonce, reason string) string {
+	reasonDigest := sha256.Sum256([]byte(reason))
+	return fmt.Sprintf("lockbox:emergency-unlock:v2:%s:%s:%x", assetID, nonce, reasonDigest[:])
+}
+
 // verifyMultiSigSignatures verifies multi-signature signatures against registered addresses
 // Each signature must be 96 bytes: pubKey (32 bytes) + signature (64 bytes)
 // The pubKey is hashed to derive the address, which must match one of the registered addresses
 // Returns the count of valid signatures
-func (s *Service) verifyMultiSigSignatures(assetID string, signatures [][]byte, addresses []iotago.Address) (int, error) {
+func (s *Service) verifyMultiSigSignatures(signingMessage string, signatures [][]byte, addresses []iotago.Address) (int, error) {
 	validCount := 0
 	usedAddresses := make(map[string]bool)
 
@@ -3001,7 +3049,7 @@ func (s *Service) verifyMultiSigSignatures(assetID string, signatures [][]byte, 
 		pubKeyHex := hex.EncodeToString(pubKeyBytes)
 		sigHex := hex.EncodeToString(signatureBytes)
 
-		valid, err := lockscript.VerifyEd25519Signature(pubKeyHex, assetID, sigHex)
+		valid, err := lockscript.VerifyEd25519Signature(pubKeyHex, signingMessage, sigHex)
 		if err != nil {
 			s.LogWarnf("Multi-sig signature %d verification error: %v", i, err)
 			continue

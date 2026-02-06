@@ -97,6 +97,10 @@ message EmergencyUnlockRequest {
   string asset_id = 1;
   string reason = 2;
   repeated bytes emergency_signatures = 3;
+  // SECURITY: Required for authentication
+  string access_token = 4;
+  // SECURITY: Required for replay protection (single-use nonce)
+  string nonce = 5;
 }
 
 message EmergencyUnlockResponse {

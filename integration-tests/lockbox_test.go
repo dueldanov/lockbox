@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"net"
 	"os"
 	"testing"
@@ -148,11 +149,10 @@ func setupB2BClient(t *testing.T) (api.LockBoxAPIClient, func()) {
 	grpcServer := grpc.NewServer()
 
 	b2bSvc := b2b.NewB2BServer(logger.NewLogger("b2b-integration"), nil, nil, nil, nil)
-	apiKeyHash := make([]byte, 32)
-	copy(apiKeyHash, []byte(integrationAPIKey))
+	apiKeyHash := sha256.Sum256([]byte(integrationAPIKey))
 	require.NoError(t, b2bSvc.RegisterPartner(&b2b.Partner{
 		ID:              integrationPartnerID,
-		APIKeyHash:      apiKeyHash,
+		APIKeyHash:      apiKeyHash[:],
 		Tier:            interfaces.TierStandard,
 		SharePercentage: 70,
 		Active:          true,

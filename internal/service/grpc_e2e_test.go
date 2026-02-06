@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"fmt"
 	"testing"
 	"time"
@@ -186,7 +188,7 @@ func TestGRPC_UnlockAsset_BeforeTime(t *testing.T) {
 	_, err = client.UnlockAsset(ctx, &pb.UnlockAssetRequest{
 		AssetId:     lockResp.AssetId,
 		AccessToken: "test-token",
-		Nonce:       fmt.Sprintf("nonce-%d", time.Now().UnixNano()),
+		Nonce:       fmt.Sprintf("%d:nonce%x", time.Now().Unix(), time.Now().UnixNano()),
 	})
 	require.Error(t, err, "UnlockAsset should fail before unlock_time")
 	t.Logf("Expected error: %v", err)
@@ -216,9 +218,11 @@ func TestGRPC_EmergencyUnlock(t *testing.T) {
 	client := pb.NewLockBoxServiceClient(conn)
 	ctx := context.Background()
 
-	// Lock asset
-	iotaAddr := tpkg.RandAddress(iotago.AddressEd25519)
-	ownerAddr := iotaAddr.Bech32(iotago.PrefixTestnet)
+	// Lock asset with an owner key pair so we can sign emergency request.
+	ownerPub, ownerPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	ownerAddrValue := iotago.Ed25519AddressFromPubKey(ownerPub)
+	ownerAddr := ownerAddrValue.Bech32(iotago.PrefixTestnet)
 	outputID := make([]byte, 34)
 
 	lockResp, err := client.LockAsset(ctx, &pb.LockAssetRequest{
@@ -228,16 +232,72 @@ func TestGRPC_EmergencyUnlock(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Emergency unlock
+	// Emergency unlock with owner signature
+	reason := "Test emergency unlock"
+	accessToken, err := GenerateAccessToken()
+	require.NoError(t, err)
+	nonce := fmt.Sprintf("%d:emer%x", time.Now().Unix(), time.Now().UnixNano())
+	signingMessage := buildEmergencyUnlockMultiSigMessage(lockResp.AssetId, nonce, reason)
+	signature := ed25519.Sign(ownerPriv, []byte(signingMessage))
+	encodedSignature := append(append([]byte{}, ownerPub...), signature...)
+	require.Len(t, encodedSignature, 96)
+
 	emergencyResp, err := client.EmergencyUnlock(ctx, &pb.EmergencyUnlockRequest{
-		AssetId: lockResp.AssetId,
-		Reason:  "Test emergency unlock",
+		AssetId:             lockResp.AssetId,
+		AccessToken:         accessToken,
+		Nonce:               nonce,
+		Reason:              reason,
+		EmergencySignatures: [][]byte{encodedSignature},
 	})
 	require.NoError(t, err)
 	require.Equal(t, "emergency", emergencyResp.Status)
 
 	t.Logf("Emergency unlock: ID=%s, Status=%s, UnlockTime=%d",
 		emergencyResp.AssetId, emergencyResp.Status, emergencyResp.UnlockTime)
+}
+
+func TestGRPC_EmergencyUnlock_RequiresSignatures(t *testing.T) {
+	svc := createTestService(t)
+	addr := listenTestGRPC(t)
+
+	grpcServer, err := NewGRPCServer(svc, nil, GRPCServerConfig{BindAddress: addr, DevMode: true})
+	require.NoError(t, err)
+
+	go func() {
+		_ = grpcServer.Start()
+	}()
+	defer grpcServer.Stop()
+	time.Sleep(100 * time.Millisecond)
+
+	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	defer conn.Close()
+
+	client := pb.NewLockBoxServiceClient(conn)
+	ctx := context.Background()
+
+	iotaAddr := tpkg.RandAddress(iotago.AddressEd25519)
+	ownerAddr := iotaAddr.Bech32(iotago.PrefixTestnet)
+	outputID := make([]byte, 34)
+
+	lockResp, err := client.LockAsset(ctx, &pb.LockAssetRequest{
+		OwnerAddress:        ownerAddr,
+		OutputId:            outputID,
+		LockDurationSeconds: 86400,
+	})
+	require.NoError(t, err)
+
+	accessToken, err := GenerateAccessToken()
+	require.NoError(t, err)
+	nonce := fmt.Sprintf("%d:emer%x", time.Now().Unix(), time.Now().UnixNano())
+
+	_, err = client.EmergencyUnlock(ctx, &pb.EmergencyUnlockRequest{
+		AssetId:     lockResp.AssetId,
+		AccessToken: accessToken,
+		Nonce:       nonce,
+		Reason:      "no signatures",
+	})
+	require.Error(t, err, "Emergency unlock without signatures must fail")
 }
 
 // createTestService creates a properly initialized service for testing

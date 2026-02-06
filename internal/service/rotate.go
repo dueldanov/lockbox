@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const minRotationInterval = 30 * 24 * time.Hour
+
 // RotateKey re-encrypts all shards with fresh keys and redistributes them to new nodes.
 // This operation disrupts long-term attack vectors by rotating encryption keys and node locations.
 //
@@ -40,6 +42,9 @@ func (s *Service) RotateKey(ctx context.Context, req *RotateKeyRequest) (*Rotate
 	}
 
 	var stepStart time.Time
+	var asset *LockedAsset
+	var lastRotation time.Time
+	var daysSinceLastRotation int
 
 	// ==========================================================================
 	// Phase 1: Request Initialization & Interval Validation (10 functions: 1-10)
@@ -68,28 +73,56 @@ func (s *Service) RotateKey(ctx context.Context, req *RotateKeyRequest) (*Rotate
 		"nonce_valid=true", time.Since(stepStart), nil)
 
 	// #3: verify_interval
-	// NOTE: Rotation interval check uses a placeholder value because
-	// asset metadata (UpdatedAt) is only available after Phase 3 shard retrieval.
-	// When persistent storage is integrated, fetch last rotation timestamp here.
 	stepStart = time.Now()
-	daysSinceLastRotation := 45
-	if daysSinceLastRotation < 30 {
+	loadedAsset, exists := s.lockedAssets[req.BundleID]
+	if !exists {
 		log.LogStepWithDuration(logging.PhaseIntervalValidation, "verify_interval",
-			fmt.Sprintf("days=%d, min_required=30", daysSinceLastRotation), time.Since(stepStart),
+			"found=false", time.Since(stepStart), fmt.Errorf("bundle not found"))
+		return nil, fmt.Errorf("bundle not found: %s", req.BundleID)
+	}
+	asset = loadedAsset
+
+	lastRotation = asset.UpdatedAt
+	if lastRotation.IsZero() {
+		lastRotation = asset.CreatedAt
+	}
+	if lastRotation.IsZero() {
+		log.LogStepWithDuration(logging.PhaseIntervalValidation, "verify_interval",
+			"rotation_timestamp_missing=true", time.Since(stepStart), fmt.Errorf("missing rotation timestamp"))
+		return nil, fmt.Errorf("missing rotation timestamp for bundle %s", req.BundleID)
+	}
+
+	rotationAge := time.Since(lastRotation)
+	daysSinceLastRotation = int(rotationAge.Hours() / 24)
+	if rotationAge < minRotationInterval {
+		log.LogStepWithDuration(logging.PhaseIntervalValidation, "verify_interval",
+			fmt.Sprintf("days=%d, min_required=%d", daysSinceLastRotation, int(minRotationInterval.Hours()/24)),
+			time.Since(stepStart),
 			fmt.Errorf("rotation interval too short"))
-		return nil, fmt.Errorf("rotation interval too short: %d days (minimum 30)", daysSinceLastRotation)
+		return nil, fmt.Errorf("rotation interval too short: %d days (minimum %d)", daysSinceLastRotation, int(minRotationInterval.Hours()/24))
 	}
 	log.LogStepWithDuration(logging.PhaseIntervalValidation, "verify_interval",
-		fmt.Sprintf("days=%d, min_required=30", daysSinceLastRotation), time.Since(stepStart), nil)
+		fmt.Sprintf("days=%d, min_required=%d", daysSinceLastRotation, int(minRotationInterval.Hours()/24)),
+		time.Since(stepStart), nil)
 
 	// #4: check_rotation_eligibility
 	stepStart = time.Now()
+	if asset.Status != AssetStatusLocked && asset.Status != AssetStatusEmergency {
+		log.LogStepWithDuration(logging.PhaseIntervalValidation, "check_rotation_eligibility",
+			fmt.Sprintf("eligible=false, status=%s", asset.Status), time.Since(stepStart), fmt.Errorf("asset not rotatable"))
+		return nil, fmt.Errorf("asset not rotatable in status %s", asset.Status)
+	}
+	signingMessage := buildRotateKeyMultiSigMessage(req.BundleID, req.Nonce)
+	if err := s.verifyKeyOperationAuthorization("rotate", signingMessage, req.Signatures, asset); err != nil {
+		log.LogStepWithDuration(logging.PhaseIntervalValidation, "check_rotation_eligibility",
+			fmt.Sprintf("eligible=false, status=%s", asset.Status), time.Since(stepStart), err)
+		return nil, fmt.Errorf("rotation authorization failed: %w", err)
+	}
 	log.LogStepWithDuration(logging.PhaseIntervalValidation, "check_rotation_eligibility",
-		"eligible=true", time.Since(stepStart), nil)
+		fmt.Sprintf("eligible=true, status=%s", asset.Status), time.Since(stepStart), nil)
 
 	// #5: get_last_rotation_timestamp
 	stepStart = time.Now()
-	lastRotation := time.Now().AddDate(0, 0, -daysSinceLastRotation)
 	log.LogStepWithDuration(logging.PhaseIntervalValidation, "get_last_rotation_timestamp",
 		fmt.Sprintf("last_rotation=%s", lastRotation.Format(time.RFC3339)), time.Since(stepStart), nil)
 
@@ -175,12 +208,6 @@ func (s *Service) RotateKey(ctx context.Context, req *RotateKeyRequest) (*Rotate
 
 	// #21: fetch_shards
 	stepStart = time.Now()
-	asset, exists := s.lockedAssets[req.BundleID]
-	if !exists {
-		log.LogStepWithDuration(logging.PhaseShardRetrieval, "fetch_shards",
-			"shard_count=0, found=false", time.Since(stepStart), fmt.Errorf("bundle not found"))
-		return nil, fmt.Errorf("bundle not found: %s", req.BundleID)
-	}
 	shardCount := asset.ShardCount
 	if shardCount == 0 {
 		shardCount = 5

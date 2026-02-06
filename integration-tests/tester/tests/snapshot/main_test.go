@@ -2,6 +2,7 @@
 package snapshot_test
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -15,6 +16,10 @@ var f *framework.Framework
 func TestMain(m *testing.M) {
 	var err error
 	if f, err = framework.Instance(); err != nil {
+		if framework.ShouldSkipDockerIntegration(err) {
+			fmt.Fprintf(os.Stderr, "Skipping integration tests: Docker unavailable in this environment: %v\n", err)
+			os.Exit(0)
+		}
 		panic(err)
 	}
 	os.Exit(m.Run())

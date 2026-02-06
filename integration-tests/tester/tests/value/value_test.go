@@ -33,7 +33,7 @@ func TestValue(t *testing.T) {
 	infoRes, err := n.Coordinator().DebugNodeAPIClient.Info(context.Background())
 	require.NoError(t, err)
 	protoParams := &infoRes.Protocol
-	parents := fetchTipsParents(t, n.Coordinator().DebugNodeAPIClient)
+	parents := fetchTipsParents(t, n.Nodes)
 
 	// create two targets
 	target1 := ed25519.NewKeyFromSeed(tpkg.RandSeed())
@@ -118,22 +118,27 @@ func TestValue(t *testing.T) {
 	require.True(t, outputMetadata.Spent)
 }
 
-func fetchTipsParents(t *testing.T, api *framework.DebugNodeAPIClient) iotago.BlockIDs {
+func fetchTipsParents(t *testing.T, nodes []*framework.Node) iotago.BlockIDs {
 	t.Helper()
+	require.NotEmpty(t, nodes)
 
 	var parents iotago.BlockIDs
+	warmupTriggered := false
 	require.Eventually(t, func() bool {
-		tips, err := api.Tips(context.Background())
-		if err != nil {
-			return false
+		parents = collectTipsParents(nodes)
+		if len(parents) >= 3 {
+			return true
 		}
-		parents, err = tips.Tips()
-		if err != nil {
-			return false
+
+		// Force short fanout if the network has not naturally produced enough tips.
+		if !warmupTriggered {
+			warmupTriggered = true
+			_, _ = nodes[len(nodes)-1].Spam(2*time.Second, 4)
+			parents = collectTipsParents(nodes)
 		}
-		parents = parents.RemoveDupsAndSort()
+
 		return len(parents) >= 3
-	}, 30*time.Second, 200*time.Millisecond)
+	}, 60*time.Second, 200*time.Millisecond)
 
 	if len(parents) > 3 {
 		parents = parents[:3]
@@ -141,4 +146,31 @@ func fetchTipsParents(t *testing.T, api *framework.DebugNodeAPIClient) iotago.Bl
 	require.Len(t, parents, 3)
 
 	return parents
+}
+
+func collectTipsParents(nodes []*framework.Node) iotago.BlockIDs {
+	seen := make(map[iotago.BlockID]struct{})
+
+	for _, node := range nodes {
+		tips, err := node.DebugNodeAPIClient.Tips(context.Background())
+		if err != nil {
+			continue
+		}
+
+		nodeTips, err := tips.Tips()
+		if err != nil {
+			continue
+		}
+
+		for _, tip := range nodeTips {
+			seen[tip] = struct{}{}
+		}
+	}
+
+	parents := make(iotago.BlockIDs, 0, len(seen))
+	for tip := range seen {
+		parents = append(parents, tip)
+	}
+
+	return parents.RemoveDupsAndSort()
 }
