@@ -68,8 +68,11 @@ func (s *Service) RotateKey(ctx context.Context, req *RotateKeyRequest) (*Rotate
 		"nonce_valid=true", time.Since(stepStart), nil)
 
 	// #3: verify_interval
+	// NOTE: Rotation interval check uses a placeholder value because
+	// asset metadata (UpdatedAt) is only available after Phase 3 shard retrieval.
+	// When persistent storage is integrated, fetch last rotation timestamp here.
 	stepStart = time.Now()
-	daysSinceLastRotation := 45 // TODO: Get from storage
+	daysSinceLastRotation := 45
 	if daysSinceLastRotation < 30 {
 		log.LogStepWithDuration(logging.PhaseIntervalValidation, "verify_interval",
 			fmt.Sprintf("days=%d, min_required=30", daysSinceLastRotation), time.Since(stepStart),
@@ -118,7 +121,7 @@ func (s *Service) RotateKey(ctx context.Context, req *RotateKeyRequest) (*Rotate
 
 	// #10: calculate_jitter
 	stepStart = time.Now()
-	jitterDays := 2 // ±3 day random jitter (simulated)
+	jitterDays := 2 // ±2 day random jitter (simulated)
 	log.LogStepWithDuration(logging.PhaseIntervalValidation, "calculate_jitter",
 		fmt.Sprintf("jitter_days=%d", jitterDays), time.Since(stepStart), nil)
 
@@ -246,7 +249,8 @@ func (s *Service) RotateKey(ctx context.Context, req *RotateKeyRequest) (*Rotate
 
 	// #61: select_new_nodes
 	stepStart = time.Now()
-	nodeCount := 5 // Based on tier
+	tierCaps := GetCapabilities(s.config.Tier)
+	nodeCount := tierCaps.ShardCopies
 	log.LogStepWithDuration(logging.PhaseNodeSelection, "select_new_nodes",
 		fmt.Sprintf("nodes_selected=%d", nodeCount), time.Since(stepStart), nil)
 
@@ -285,7 +289,9 @@ func (s *Service) RotateKey(ctx context.Context, req *RotateKeyRequest) (*Rotate
 
 	// #84: increment_version
 	stepStart = time.Now()
-	newVersion := 2 // v1 -> v2
+	// LockedAsset doesn't track version yet — always set to 2 for post-rotation format.
+	// When version tracking is added to LockedAsset, use: asset.Version + 1
+	newVersion := 2
 	log.LogStepWithDuration(logging.PhaseMetadataUpdate, "increment_version",
 		fmt.Sprintf("new_version=v%d", newVersion), time.Since(stepStart), nil)
 

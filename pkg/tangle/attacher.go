@@ -200,8 +200,11 @@ func (a *BlockAttacher) validateParents(iotaBlock *iotago.Block) error {
 	if _, isMilestone := iotaBlock.Payload.(*iotago.Milestone); isMilestone {
 		return nil
 	}
-	if a.tangle == nil || a.tangle.minPreviousRefs <= 0 {
-		return nil
+	if a.tangle == nil {
+		return errors.New("tangle not initialized")
+	}
+	if a.tangle.minPreviousRefs <= 0 {
+		return errors.New("minPreviousRefs not configured (must be > 0)")
 	}
 
 	if err := dag.ValidateParents(iotaBlock.Parents, a.tangle.minPreviousRefs); err != nil {

@@ -8,20 +8,24 @@ type ParametersLockBox struct {
 	Enabled bool `default:"true" usage:"whether the LockBox extension is enabled"`
 
 	GRPC struct {
-		BindAddress string `default:"0.0.0.0:50051" usage:"LockBox gRPC API bind address"`
-		TLSEnabled  bool   `default:"false" usage:"enable TLS for gRPC API (required in production)"`
-		TLSCertPath string `default:"" usage:"path to TLS certificate file"`
-		TLSKeyPath  string `default:"" usage:"path to TLS key file"`
+		BindAddress   string `default:"0.0.0.0:50051" usage:"LockBox gRPC API bind address"`
+		TLSEnabled    bool   `default:"false" usage:"enable TLS for gRPC API (required in production)"`
+		TLSCertPath   string `default:"" usage:"path to TLS certificate file"`
+		TLSKeyPath    string `default:"" usage:"path to TLS key file"`
+		TLSCACertPath string `default:"" usage:"path to CA certificate for mTLS client verification"`
+		DevMode       bool   `default:"false" usage:"allow insecure gRPC for local development (NEVER use in production)"`
 	}
 
 	B2B struct {
 		Enabled bool `default:"true" usage:"enable B2B gRPC API"`
 
 		GRPC struct {
-			BindAddress string `default:"0.0.0.0:50052" usage:"B2B gRPC API bind address"`
-			TLSEnabled  bool   `default:"false" usage:"enable TLS for B2B gRPC API (required in production)"`
-			TLSCertPath string `default:"" usage:"path to TLS certificate file"`
-			TLSKeyPath  string `default:"" usage:"path to TLS key file"`
+			BindAddress   string `default:"0.0.0.0:50052" usage:"B2B gRPC API bind address"`
+			TLSEnabled    bool   `default:"false" usage:"enable TLS for B2B gRPC API (required in production)"`
+			TLSCertPath   string `default:"" usage:"path to TLS certificate file"`
+			TLSKeyPath    string `default:"" usage:"path to TLS key file"`
+			TLSCACertPath string `default:"" usage:"path to CA certificate for mTLS client verification"`
+			DevMode       bool   `default:"false" usage:"allow insecure B2B gRPC for local development (NEVER use in production)"`
 		}
 	}
 

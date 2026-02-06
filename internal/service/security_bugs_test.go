@@ -283,10 +283,10 @@ func TestRateLimiter_PerUser_Fixed(t *testing.T) {
 // TestValidateAccessToken_FakeHMAC_AllPatterns tests all fake HMAC patterns.
 func TestValidateAccessToken_FakeHMAC_AllPatterns(t *testing.T) {
 	// Ensure dev mode is enabled for deterministic testing
-	os.Setenv("LOCKBOX_DEV_MODE", "true")
+	DevMode = true
 	reinitTokenHMACKey()
 	defer func() {
-		os.Setenv("LOCKBOX_DEV_MODE", "true")
+		DevMode = true
 		reinitTokenHMACKey()
 	}()
 
@@ -326,7 +326,7 @@ func TestValidateAccessToken_FakeHMAC_AllPatterns(t *testing.T) {
 
 // TestValidateAccessToken_DifferentPayloadSameHMAC tests HMAC payload binding.
 func TestValidateAccessToken_DifferentPayloadSameHMAC(t *testing.T) {
-	os.Setenv("LOCKBOX_DEV_MODE", "true")
+	DevMode = true
 	reinitTokenHMACKey()
 
 	svc := &Service{}

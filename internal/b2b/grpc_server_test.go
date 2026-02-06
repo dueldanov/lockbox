@@ -25,10 +25,10 @@ import (
 const testAPIKey = "12345678901234567890123456789012"
 
 // testPartner is a registered test partner.
-// Note: APIKeyHash must match the hashAPIKey output for testAPIKey
+// APIKeyHash is the SHA-256 hash of testAPIKey (produced by hashAPIKey).
 var testPartner = &Partner{
 	ID:              "test-partner-1",
-	APIKeyHash:      []byte(testAPIKey), // 32 bytes to match hashAPIKey output
+	APIKeyHash:      hashAPIKey(testAPIKey),
 	Tier:            interfaces.TierStandard,
 	SharePercentage: 70.0,
 	Active:          true,

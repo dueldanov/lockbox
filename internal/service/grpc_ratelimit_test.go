@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -19,9 +18,6 @@ import (
 
 // TestGRPCServer_RateLimiting tests that rate limiter is enforced
 func TestGRPCServer_RateLimiting(t *testing.T) {
-	os.Setenv("LOCKBOX_DEV_MODE", "true")
-	defer os.Unsetenv("LOCKBOX_DEV_MODE")
-
 	svc := createTestService(t)
 
 	// Create rate limiter with strict limits for testing (2 req/min)
@@ -34,7 +30,7 @@ func TestGRPCServer_RateLimiting(t *testing.T) {
 	// Start gRPC server with rate limiter
 	addr := listenTestGRPC(t)
 
-	grpcServer, err := NewGRPCServer(svc, rateLimiter, addr, false, "", "")
+	grpcServer, err := NewGRPCServer(svc, rateLimiter, GRPCServerConfig{BindAddress: addr, DevMode: true})
 	require.NoError(t, err)
 
 	go func() {
@@ -83,9 +79,6 @@ func TestGRPCServer_RateLimiting(t *testing.T) {
 
 // TestGRPCServer_RateLimiting_DifferentUsers tests that different users have independent limits
 func TestGRPCServer_RateLimiting_DifferentUsers(t *testing.T) {
-	os.Setenv("LOCKBOX_DEV_MODE", "true")
-	defer os.Unsetenv("LOCKBOX_DEV_MODE")
-
 	svc := createTestService(t)
 
 	// Create rate limiter with strict limits (2 req/min)
@@ -98,7 +91,7 @@ func TestGRPCServer_RateLimiting_DifferentUsers(t *testing.T) {
 	// Start gRPC server
 	addr := listenTestGRPC(t)
 
-	grpcServer, err := NewGRPCServer(svc, rateLimiter, addr, false, "", "")
+	grpcServer, err := NewGRPCServer(svc, rateLimiter, GRPCServerConfig{BindAddress: addr, DevMode: true})
 	require.NoError(t, err)
 
 	go func() {
@@ -151,9 +144,6 @@ func TestGRPCServer_RateLimiting_DifferentUsers(t *testing.T) {
 
 // TestGRPCServer_RateLimiting_PublicMethods tests that public methods are not rate limited
 func TestGRPCServer_RateLimiting_PublicMethods(t *testing.T) {
-	os.Setenv("LOCKBOX_DEV_MODE", "true")
-	defer os.Unsetenv("LOCKBOX_DEV_MODE")
-
 	svc := createTestService(t)
 
 	// Create rate limiter with very strict limits (1 req/min)
@@ -166,7 +156,7 @@ func TestGRPCServer_RateLimiting_PublicMethods(t *testing.T) {
 	// Start gRPC server
 	addr := listenTestGRPC(t)
 
-	grpcServer, err := NewGRPCServer(svc, rateLimiter, addr, false, "", "")
+	grpcServer, err := NewGRPCServer(svc, rateLimiter, GRPCServerConfig{BindAddress: addr, DevMode: true})
 	require.NoError(t, err)
 
 	go func() {
@@ -194,9 +184,6 @@ func TestGRPCServer_RateLimiting_PublicMethods(t *testing.T) {
 
 // TestGRPCServer_RateLimiting_RetryAfter tests that retry-after is returned correctly
 func TestGRPCServer_RateLimiting_RetryAfter(t *testing.T) {
-	os.Setenv("LOCKBOX_DEV_MODE", "true")
-	defer os.Unsetenv("LOCKBOX_DEV_MODE")
-
 	svc := createTestService(t)
 
 	// Create rate limiter with strict limits
@@ -209,7 +196,7 @@ func TestGRPCServer_RateLimiting_RetryAfter(t *testing.T) {
 	// Start gRPC server
 	addr := listenTestGRPC(t)
 
-	grpcServer, err := NewGRPCServer(svc, rateLimiter, addr, false, "", "")
+	grpcServer, err := NewGRPCServer(svc, rateLimiter, GRPCServerConfig{BindAddress: addr, DevMode: true})
 	require.NoError(t, err)
 
 	go func() {

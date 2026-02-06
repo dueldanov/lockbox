@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -50,17 +49,13 @@ func (m *mockZKPProvider) VerifyUnlockProof(proof *interfaces.UnlockProof) error
 
 // TestGRPC_GetServiceInfo tests the GetServiceInfo endpoint via gRPC
 func TestGRPC_GetServiceInfo(t *testing.T) {
-	// Enable dev mode for insecure gRPC
-	os.Setenv("LOCKBOX_DEV_MODE", "true")
-	defer os.Unsetenv("LOCKBOX_DEV_MODE")
-
 	// Create test service
 	svc := createTestService(t)
 
 	// Start gRPC server on random port
 	addr := listenTestGRPC(t)
 
-	grpcServer, err := NewGRPCServer(svc, nil, addr, false, "", "")
+	grpcServer, err := NewGRPCServer(svc, nil, GRPCServerConfig{BindAddress: addr, DevMode: true})
 	require.NoError(t, err)
 
 	// Start server in goroutine
@@ -99,15 +94,12 @@ func TestGRPC_GetServiceInfo(t *testing.T) {
 
 // TestGRPC_LockAsset_Flow tests the Lock → GetStatus flow via gRPC
 func TestGRPC_LockAsset_Flow(t *testing.T) {
-	os.Setenv("LOCKBOX_DEV_MODE", "true")
-	defer os.Unsetenv("LOCKBOX_DEV_MODE")
-
 	svc := createTestService(t)
 
 	// Start gRPC server
 	addr := listenTestGRPC(t)
 
-	grpcServer, err := NewGRPCServer(svc, nil, addr, false, "", "")
+	grpcServer, err := NewGRPCServer(svc, nil, GRPCServerConfig{BindAddress: addr, DevMode: true})
 	require.NoError(t, err)
 
 	go func() {
@@ -157,15 +149,12 @@ func TestGRPC_LockAsset_Flow(t *testing.T) {
 
 // TestGRPC_UnlockAsset_BeforeTime tests that unlock fails before unlock_time
 func TestGRPC_UnlockAsset_BeforeTime(t *testing.T) {
-	os.Setenv("LOCKBOX_DEV_MODE", "true")
-	defer os.Unsetenv("LOCKBOX_DEV_MODE")
-
 	svc := createTestService(t)
 
 	// Start gRPC server
 	addr := listenTestGRPC(t)
 
-	grpcServer, err := NewGRPCServer(svc, nil, addr, false, "", "")
+	grpcServer, err := NewGRPCServer(svc, nil, GRPCServerConfig{BindAddress: addr, DevMode: true})
 	require.NoError(t, err)
 
 	go func() {
@@ -205,16 +194,13 @@ func TestGRPC_UnlockAsset_BeforeTime(t *testing.T) {
 
 // TestGRPC_EmergencyUnlock tests the emergency unlock endpoint
 func TestGRPC_EmergencyUnlock(t *testing.T) {
-	os.Setenv("LOCKBOX_DEV_MODE", "true")
-	defer os.Unsetenv("LOCKBOX_DEV_MODE")
-
 	// Create service with emergency unlock enabled (uses createTestService)
 	svc := createTestService(t)
 
 	// Start gRPC server
 	addr := listenTestGRPC(t)
 
-	grpcServer, err := NewGRPCServer(svc, nil, addr, false, "", "")
+	grpcServer, err := NewGRPCServer(svc, nil, GRPCServerConfig{BindAddress: addr, DevMode: true})
 	require.NoError(t, err)
 
 	go func() {

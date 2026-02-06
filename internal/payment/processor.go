@@ -309,8 +309,14 @@ func (p *PaymentProcessor) CreatePayment(ctx context.Context, req CreatePaymentR
 	}
 
 	// Generate payment ID and token
-	paymentID := generateID("pay")
-	paymentToken := generateToken()
+	paymentID, err := generateID("pay")
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate payment ID: %w", err)
+	}
+	paymentToken, err := generateToken()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate payment token: %w", err)
+	}
 
 	now := time.Now()
 	payment := &Payment{
@@ -603,19 +609,19 @@ func (p *PaymentProcessor) CleanupExpired(ctx context.Context) int {
 }
 
 // generateID generates a unique ID with a prefix.
-func generateID(prefix string) string {
+func generateID(prefix string) (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand.Read failed: %v", err))
+		return "", fmt.Errorf("crypto/rand.Read failed: %w", err)
 	}
-	return fmt.Sprintf("%s_%s", prefix, hex.EncodeToString(b))
+	return fmt.Sprintf("%s_%s", prefix, hex.EncodeToString(b)), nil
 }
 
 // generateToken generates a secure random token.
-func generateToken() string {
+func generateToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand.Read failed: %v", err))
+		return "", fmt.Errorf("crypto/rand.Read failed: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }

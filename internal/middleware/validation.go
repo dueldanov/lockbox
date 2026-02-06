@@ -7,9 +7,18 @@ import (
 	"time"
 
 	"github.com/dueldanov/lockbox/v2/internal/errors"
-	"github.com/dueldanov/lockbox/v2/internal/lockscript"
 	"github.com/dueldanov/lockbox/v2/internal/service"
 	iotago "github.com/iotaledger/iota.go/v3"
+)
+
+// Validation limits
+const (
+	maxScriptSize      = 65536 // Maximum LockScript source size in bytes
+	maxMultiSigAddrs   = 20    // Maximum number of multi-sig addresses
+	maxSignatureSize   = 512   // Maximum individual signature size in bytes
+	maxSignatureCount  = 20    // Maximum number of signatures per request
+	minAssetIDLength   = 8     // Minimum asset ID length
+	maxAssetIDLength   = 64    // Maximum asset ID length
 )
 
 // ValidationMiddleware provides request validation
@@ -45,10 +54,10 @@ func (v *ValidationMiddleware) LockAsset(ctx context.Context, req *service.LockA
 	}
 	
 	// Validate lock script
-	if len(req.LockScript) > 65536 {
-		return nil, errors.ErrScriptTooLarge(65536)
+	if len(req.LockScript) > maxScriptSize {
+		return nil, errors.ErrScriptTooLarge(maxScriptSize)
 	}
-	
+
 	// Validate multi-sig if present
 	if len(req.MultiSigAddresses) > 0 {
 		if req.MinSignatures <= 0 {
@@ -57,8 +66,8 @@ func (v *ValidationMiddleware) LockAsset(ctx context.Context, req *service.LockA
 		if req.MinSignatures > len(req.MultiSigAddresses) {
 			return nil, errors.ErrInvalidArgument("minimum signatures cannot exceed number of addresses")
 		}
-		if len(req.MultiSigAddresses) > 20 {
-			return nil, errors.ErrInvalidArgument("maximum 20 multi-sig addresses allowed")
+		if len(req.MultiSigAddresses) > maxMultiSigAddrs {
+			return nil, errors.ErrInvalidArgument(fmt.Sprintf("maximum %d multi-sig addresses allowed", maxMultiSigAddrs))
 		}
 	}
 	
@@ -78,15 +87,15 @@ func (v *ValidationMiddleware) UnlockAsset(ctx context.Context, req *service.Unl
 	}
 	
 	// Validate signatures if present
-	if len(req.Signatures) > 20 {
+	if len(req.Signatures) > maxSignatureCount {
 		return nil, errors.ErrInvalidArgument("too many signatures provided")
 	}
-	
+
 	for i, sig := range req.Signatures {
 		if len(sig) == 0 {
 			return nil, errors.ErrInvalidArgument(fmt.Sprintf("signature %d is empty", i))
 		}
-		if len(sig) > 512 {
+		if len(sig) > maxSignatureSize {
 			return nil, errors.ErrInvalidArgument(fmt.Sprintf("signature %d is too large", i))
 		}
 	}
@@ -111,8 +120,8 @@ func (v *ValidationMiddleware) GetAssetStatus(assetID string) (*service.LockedAs
 
 // isValidAssetID validates asset ID format
 func isValidAssetID(id string) bool {
-	// Asset ID should be alphanumeric with hyphens, 8-64 characters
-	if len(id) < 8 || len(id) > 64 {
+	// Asset ID should be alphanumeric with hyphens
+	if len(id) < minAssetIDLength || len(id) > maxAssetIDLength {
 		return false
 	}
 	
@@ -130,58 +139,3 @@ func isValidAssetID(id string) bool {
 	return true
 }
 
-// CompileScript validates compile script requests
-// Note: This method is not part of the Service interface
-func (v *ValidationMiddleware) CompileScript(ctx context.Context, source string) (*lockscript.CompiledScript, error) {
-	// Validate script source
-	if source == "" {
-		return nil, errors.ErrInvalidArgument("script source is required")
-	}
-
-	// Check script size
-	if len(source) > 65536 {
-		return nil, errors.ErrScriptTooLarge(65536)
-	}
-
-	// Basic syntax validation
-	if err := validateScriptSyntax(source); err != nil {
-		return nil, errors.ErrInvalidScript(err.Error())
-	}
-
-	// TODO: CompileScript is not part of Service interface, need to add or remove
-	return nil, fmt.Errorf("CompileScript not implemented in middleware")
-}
-
-// validateScriptSyntax performs basic syntax validation
-func validateScriptSyntax(source string) error {
-	// Check for dangerous keywords
-	dangerousKeywords := []string{
-		"eval", "exec", "system", "__import__", "os.", "subprocess",
-	}
-	
-	lowerSource := strings.ToLower(source)
-	for _, keyword := range dangerousKeywords {
-		if strings.Contains(lowerSource, keyword) {
-			return fmt.Errorf("potentially dangerous keyword '%s' detected", keyword)
-		}
-	}
-	
-	// Check balanced braces
-	braceCount := 0
-	for _, r := range source {
-		switch r {
-		case '{':
-			braceCount++
-		case '}':
-			braceCount--
-			if braceCount < 0 {
-				return fmt.Errorf("unmatched closing brace")
-			}
-		}
-	}
-	if braceCount != 0 {
-		return fmt.Errorf("unmatched opening brace")
-	}
-	
-	return nil
-}

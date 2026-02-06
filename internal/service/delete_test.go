@@ -14,7 +14,7 @@ import (
 
 func init() {
 	// Set dev mode for tests to allow deterministic HMAC key
-	os.Setenv("LOCKBOX_DEV_MODE", "true")
+	DevMode = true
 	// Force reinit of HMAC key with dev mode enabled
 	reinitTokenHMACKey()
 }
@@ -99,27 +99,26 @@ func TestGenerateAccessToken_Format(t *testing.T) {
 // HMAC Key Security Tests
 // ============================================
 
-func TestLoadTokenHMACKey_PanicOnMissingKey(t *testing.T) {
+func TestLoadTokenHMACKey_ErrorOnMissingKey(t *testing.T) {
 	// Save original values
 	origKey := os.Getenv("LOCKBOX_TOKEN_HMAC_KEY")
-	origDev := os.Getenv("LOCKBOX_DEV_MODE")
+	origDevMode := DevMode
 	defer func() {
 		os.Setenv("LOCKBOX_TOKEN_HMAC_KEY", origKey)
-		os.Setenv("LOCKBOX_DEV_MODE", origDev)
+		DevMode = origDevMode
 		reinitTokenHMACKey() // Restore for other tests
 	}()
 
 	// Clear key and disable dev mode
 	os.Unsetenv("LOCKBOX_TOKEN_HMAC_KEY")
-	os.Setenv("LOCKBOX_DEV_MODE", "false")
+	DevMode = false
 
-	// Should panic
-	require.Panics(t, func() {
-		loadTokenHMACKey()
-	}, "SECURITY: Must panic when HMAC key is missing in production")
+	_, err := loadTokenHMACKey()
+	require.Error(t, err, "SECURITY: Must return error when HMAC key is missing in production")
+	require.Contains(t, err.Error(), "LOCKBOX_TOKEN_HMAC_KEY")
 }
 
-func TestLoadTokenHMACKey_PanicOnInvalidHex(t *testing.T) {
+func TestLoadTokenHMACKey_ErrorOnInvalidHex(t *testing.T) {
 	origKey := os.Getenv("LOCKBOX_TOKEN_HMAC_KEY")
 	defer func() {
 		os.Setenv("LOCKBOX_TOKEN_HMAC_KEY", origKey)
@@ -128,12 +127,12 @@ func TestLoadTokenHMACKey_PanicOnInvalidHex(t *testing.T) {
 
 	os.Setenv("LOCKBOX_TOKEN_HMAC_KEY", "not-valid-hex-string!")
 
-	require.Panics(t, func() {
-		loadTokenHMACKey()
-	}, "SECURITY: Must panic when HMAC key is invalid hex")
+	_, err := loadTokenHMACKey()
+	require.Error(t, err, "SECURITY: Must return error when HMAC key is invalid hex")
+	require.Contains(t, err.Error(), "not valid hex")
 }
 
-func TestLoadTokenHMACKey_PanicOnShortKey(t *testing.T) {
+func TestLoadTokenHMACKey_ErrorOnShortKey(t *testing.T) {
 	origKey := os.Getenv("LOCKBOX_TOKEN_HMAC_KEY")
 	defer func() {
 		os.Setenv("LOCKBOX_TOKEN_HMAC_KEY", origKey)
@@ -143,27 +142,27 @@ func TestLoadTokenHMACKey_PanicOnShortKey(t *testing.T) {
 	// Only 16 bytes (32 hex chars) - too short
 	os.Setenv("LOCKBOX_TOKEN_HMAC_KEY", "0123456789abcdef0123456789abcdef")
 
-	require.Panics(t, func() {
-		loadTokenHMACKey()
-	}, "SECURITY: Must panic when HMAC key is less than 32 bytes")
+	_, err := loadTokenHMACKey()
+	require.Error(t, err, "SECURITY: Must return error when HMAC key is less than 32 bytes")
+	require.Contains(t, err.Error(), "at least 32 bytes")
 }
 
-func TestLoadTokenHMACKey_PanicOnAllZeros(t *testing.T) {
+func TestLoadTokenHMACKey_ErrorOnAllZeros(t *testing.T) {
 	origKey := os.Getenv("LOCKBOX_TOKEN_HMAC_KEY")
-	origDev := os.Getenv("LOCKBOX_DEV_MODE")
+	origDevMode := DevMode
 	defer func() {
 		os.Setenv("LOCKBOX_TOKEN_HMAC_KEY", origKey)
-		os.Setenv("LOCKBOX_DEV_MODE", origDev)
+		DevMode = origDevMode
 		reinitTokenHMACKey()
 	}()
 
 	// All zeros key in production
 	os.Setenv("LOCKBOX_TOKEN_HMAC_KEY", "0000000000000000000000000000000000000000000000000000000000000000")
-	os.Setenv("LOCKBOX_DEV_MODE", "false")
+	DevMode = false
 
-	require.Panics(t, func() {
-		loadTokenHMACKey()
-	}, "SECURITY: Must panic when HMAC key is all zeros in production")
+	_, err := loadTokenHMACKey()
+	require.Error(t, err, "SECURITY: Must return error when HMAC key is all zeros in production")
+	require.Contains(t, err.Error(), "all zeros")
 }
 
 func TestLoadTokenHMACKey_ValidKey(t *testing.T) {
@@ -176,10 +175,9 @@ func TestLoadTokenHMACKey_ValidKey(t *testing.T) {
 	// Valid 32-byte key
 	os.Setenv("LOCKBOX_TOKEN_HMAC_KEY", "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
 
-	require.NotPanics(t, func() {
-		key := loadTokenHMACKey()
-		require.Len(t, key, 32, "Key should be 32 bytes")
-	}, "Valid key should not panic")
+	key, err := loadTokenHMACKey()
+	require.NoError(t, err, "Valid key should not return error")
+	require.Len(t, key, 32, "Key should be 32 bytes")
 }
 
 // ============================================

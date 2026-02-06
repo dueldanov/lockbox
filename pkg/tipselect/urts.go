@@ -357,10 +357,13 @@ func (ts *TipSelector) selectTips(tipsMap map[iotago.BlockID]*Tip) (iotago.Block
 	return tips, nil
 }
 
-// optimalTipCount returns the optimal number of tips.
+// optimalTipCount returns the configured number of tips to select.
+// Panics at startup if tipCount was not properly configured.
 func (ts *TipSelector) optimalTipCount() int {
 	if ts.tipCount <= 0 {
-		return 1
+		// This should never happen — tipCount is set from minPreviousRefs at construction.
+		// Returning 1 silently would violate the 3+3 rule, so fail loudly.
+		panic("tipselect: tipCount not configured (must be > 0, expected 3 for 3+3 rule)")
 	}
 
 	return ts.tipCount

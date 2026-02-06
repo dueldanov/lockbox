@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"os"
@@ -23,34 +25,50 @@ import (
 type GRPCServer struct {
 	pb.UnimplementedLockBoxServiceServer
 
-	service      *Service
-	rateLimiter  *verification.RateLimiter
-	grpcServer   *grpc.Server
-	bindAddress  string
-	tlsEnabled   bool
-	tlsCertPath  string
-	tlsKeyPath   string
+	service       *Service
+	rateLimiter   *verification.RateLimiter
+	grpcServer    *grpc.Server
+	bindAddress   string
+	tlsEnabled    bool
+	tlsCertPath   string
+	tlsKeyPath    string
+	tlsCACertPath string
+	devMode       bool
+}
+
+// GRPCServerConfig holds configuration for creating a GRPCServer.
+type GRPCServerConfig struct {
+	BindAddress   string
+	TLSEnabled    bool
+	TLSCertPath   string
+	TLSKeyPath    string
+	TLSCACertPath string // CA certificate for verifying client certs (mTLS)
+	DevMode       bool   // Allow insecure mode for local development/testing
 }
 
 func NewGRPCServer(
 	service *Service,
 	rateLimiter *verification.RateLimiter,
-	bindAddress string,
-	tlsEnabled bool,
-	tlsCertPath, tlsKeyPath string,
+	config GRPCServerConfig,
 ) (*GRPCServer, error) {
 	// If no rate limiter provided, create default (5 req/min)
 	if rateLimiter == nil {
 		rateLimiter = verification.NewRateLimiter(verification.DefaultRateLimiterConfig())
 	}
 
+	if config.DevMode {
+		fmt.Fprintln(os.Stderr, "WARNING: gRPC server running in dev mode — TLS not enforced. Do NOT use in production.")
+	}
+
 	s := &GRPCServer{
-		service:     service,
-		rateLimiter: rateLimiter,
-		bindAddress: bindAddress,
-		tlsEnabled:  tlsEnabled,
-		tlsCertPath: tlsCertPath,
-		tlsKeyPath:  tlsKeyPath,
+		service:       service,
+		rateLimiter:   rateLimiter,
+		bindAddress:   config.BindAddress,
+		tlsEnabled:    config.TLSEnabled,
+		tlsCertPath:   config.TLSCertPath,
+		tlsKeyPath:    config.TLSKeyPath,
+		tlsCACertPath: config.TLSCACertPath,
+		devMode:       config.DevMode,
 	}
 
 	// Create gRPC server with options
@@ -64,17 +82,15 @@ func NewGRPCServer(
 
 	// SECURITY: TLS is REQUIRED in production per requirements (mutual TLS 1.3)
 	// Section 2.1.2: "Node authentication via mutual TLS 1.3"
-	// DEV MODE: Allow insecure for local development/testing when LOCKBOX_DEV_MODE=true
-	devMode := os.Getenv("LOCKBOX_DEV_MODE") == "true"
-	if !tlsEnabled && !devMode {
-		return nil, fmt.Errorf("TLS is required for gRPC server - set tlsEnabled=true or LOCKBOX_DEV_MODE=true for testing")
+	if !config.TLSEnabled && !config.DevMode {
+		return nil, fmt.Errorf("TLS is required for gRPC server — set TLSEnabled=true or DevMode=true for testing")
 	}
-	if tlsEnabled {
-		creds, err := credentials.NewServerTLSFromFile(tlsCertPath, tlsKeyPath)
+	if config.TLSEnabled {
+		tlsConfig, err := buildMTLSConfig(config.TLSCertPath, config.TLSKeyPath, config.TLSCACertPath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load TLS credentials: %w", err)
+			return nil, fmt.Errorf("failed to configure mTLS: %w", err)
 		}
-		opts = append(opts, grpc.Creds(creds))
+		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsConfig)))
 	}
 
 	// SECURITY: Add auth interceptor for all unary calls
@@ -84,12 +100,44 @@ func NewGRPCServer(
 	s.grpcServer = grpc.NewServer(opts...)
 	pb.RegisterLockBoxServiceServer(s.grpcServer, s)
 
-	// Enable reflection for grpcurl/grpcui debugging
-	if devMode {
+	// Enable reflection for grpcurl/grpcui debugging (dev mode only)
+	if config.DevMode {
 		reflection.Register(s.grpcServer)
 	}
 
 	return s, nil
+}
+
+// buildMTLSConfig creates a TLS configuration with mutual TLS 1.3.
+// If caCertPath is empty, only server-side TLS is configured (no client cert verification).
+func buildMTLSConfig(certPath, keyPath, caCertPath string) (*tls.Config, error) {
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load server certificate: %w", err)
+	}
+
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS13,
+	}
+
+	// If CA cert is provided, enable mutual TLS (client cert verification)
+	if caCertPath != "" {
+		caCert, err := os.ReadFile(caCertPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read CA certificate: %w", err)
+		}
+
+		certPool := x509.NewCertPool()
+		if !certPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("failed to parse CA certificate")
+		}
+
+		tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+		tlsConfig.ClientCAs = certPool
+	}
+
+	return tlsConfig, nil
 }
 
 // SECURITY: Auth interceptor validates requests before processing
@@ -120,7 +168,8 @@ func (s *GRPCServer) authInterceptor(
 		}
 	}
 
-	// TODO: Add JWT validation from metadata for sensitive methods
+	// Note: Primary authentication is handled by mTLS (mutual TLS 1.3).
+	// JWT can be added as an optional secondary auth layer for per-request authorization.
 	// For now, rely on mTLS for authentication
 	// Per-method auth can be added by checking info.FullMethod
 

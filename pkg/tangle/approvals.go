@@ -63,7 +63,13 @@ func (t *Tangle) updateApprovalsForBlock(cachedBlock *storage.CachedBlock) {
 				if latency < 0 {
 					latency = 0
 				}
-				t.serverMetrics.DAGApprovalLatencyNanos.Store(uint64(latency))
+				// Use exponential moving average to smooth latency metric
+				// instead of overwriting with the last single value.
+				// EMA alpha = 0.2: responsive to changes but stable under variance.
+				const emaAlpha = 0.2
+				prev := float64(t.serverMetrics.DAGApprovalLatencyNanos.Load())
+				updated := prev*(1-emaAlpha) + float64(latency)*emaAlpha
+				t.serverMetrics.DAGApprovalLatencyNanos.Store(uint64(updated))
 			}
 		}
 	}

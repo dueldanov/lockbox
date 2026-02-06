@@ -17,8 +17,9 @@ import (
 type Manager struct {
 	*logger.WrappedLogger
 
-	storage         *storage.Storage
-	protocolManager *protocol.Manager
+	storage          *storage.Storage
+	protocolManager  *protocol.Manager
+	minPreviousRefs  int
 
 	consensusLock sync.RWMutex
 	validators    map[string]*Validator
@@ -48,18 +49,38 @@ type Validator struct {
 
 const defaultMinPreviousRefs = 3
 
-// NewManager creates a new consensus manager
-func NewManager(log *logger.Logger, storage *storage.Storage, protocolManager *protocol.Manager) *Manager {
-	return &Manager{
+// NewManager creates a new consensus manager.
+// minPreviousRefs controls how many parent references are required per block.
+// If <= 0, defaults to 3 (the 3+3 rule).
+func NewManager(log *logger.Logger, storage *storage.Storage, protocolManager *protocol.Manager, opts ...ManagerOption) *Manager {
+	m := &Manager{
 		WrappedLogger:   logger.NewWrappedLogger(log),
 		storage:         storage,
 		protocolManager: protocolManager,
+		minPreviousRefs: defaultMinPreviousRefs,
 		validators:      make(map[string]*Validator),
 		Events: &Events{
 			ConsensusReached: event.New1[*ConsensusResult](),
 			ValidatorAdded:   event.New1[string](),
 			ValidatorRemoved: event.New1[string](),
 		},
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	if m.minPreviousRefs <= 0 {
+		m.minPreviousRefs = defaultMinPreviousRefs
+	}
+	return m
+}
+
+// ManagerOption configures a Manager.
+type ManagerOption func(*Manager)
+
+// WithMinPreviousRefs sets the required parent reference count (default: 3).
+func WithMinPreviousRefs(n int) ManagerOption {
+	return func(m *Manager) {
+		m.minPreviousRefs = n
 	}
 }
 
@@ -96,7 +117,7 @@ func (m *Manager) validateBlockStructure(block *iotago.Block) error {
 	if len(block.Parents) == 0 {
 		return ErrNoParents
 	}
-	if len(block.Parents) != defaultMinPreviousRefs {
+	if len(block.Parents) != m.minPreviousRefs {
 		return ErrInvalidParentsCount
 	}
 	seen := make(map[iotago.BlockID]struct{}, len(block.Parents))

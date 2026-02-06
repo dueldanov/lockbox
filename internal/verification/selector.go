@@ -13,6 +13,19 @@ import (
 	"github.com/iotaledger/hive.go/logger"
 )
 
+// Node selection tuning constants
+const (
+	// emaAlpha controls the weight of new latency samples in exponential moving average.
+	// Higher values make the EMA more responsive to recent measurements.
+	emaAlpha = 0.3
+
+	// reputationGainFactor is the multiplier applied to reputation on successful verification.
+	reputationGainFactor = 1.01
+
+	// reputationLossFactor is the multiplier applied to reputation on failed verification.
+	reputationLossFactor = 0.95
+)
+
 // NodeSelector selects verification nodes based on tier requirements and geographic distribution
 type NodeSelector struct {
 	*logger.WrappedLogger
@@ -65,10 +78,14 @@ func (ns *NodeSelector) SelectNodes(ctx context.Context, tier lockbox.Tier, pref
 	
 	var count int
 	switch tier {
-	case lockbox.TierBasic, lockbox.TierStandard, lockbox.TierPremium:
-		count = 3 // Triple verification
+	case lockbox.TierBasic:
+		count = 3
+	case lockbox.TierStandard:
+		count = 3
+	case lockbox.TierPremium:
+		count = 4
 	case lockbox.TierElite:
-		count = 2 // Dual verification
+		count = 5
 	default:
 		return nil, fmt.Errorf("unknown tier: %v", tier)
 	}
@@ -209,14 +226,13 @@ func (ns *NodeSelector) UpdateNodeMetrics(nodeID string, latency time.Duration, 
 	}
 	
 	// Update latency with exponential moving average
-	alpha := 0.3
-	node.Latency = time.Duration(float64(node.Latency)*(1-alpha) + float64(latency)*alpha)
-	
+	node.Latency = time.Duration(float64(node.Latency)*(1-emaAlpha) + float64(latency)*emaAlpha)
+
 	// Update reputation based on success
 	if success {
-		node.Reputation = math.Min(1.0, node.Reputation*1.01)
+		node.Reputation = math.Min(1.0, node.Reputation*reputationGainFactor)
 	} else {
-		node.Reputation = math.Max(0.0, node.Reputation*0.95)
+		node.Reputation = math.Max(0.0, node.Reputation*reputationLossFactor)
 	}
 	
 	node.LastUsed = time.Now()

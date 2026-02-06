@@ -5,9 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"math"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -198,32 +196,18 @@ func TestVM_StackUnderflow_ReturnsError(t *testing.T) {
 	require.Error(t, err, "SECURITY: Stack underflow MUST return error, not nil")
 }
 
-// TestVM_StackUnderflow_NilToZero verifies that popInt panics on empty stack (FIXED).
+// TestVM_StackUnderflow_NilToZero verifies that popInt returns an error on empty stack (FIXED).
+// Previously this tested for a panic; now popInt returns (int64, error) for crash resilience.
 func TestVM_StackUnderflow_NilToZero(t *testing.T) {
 	vm := NewVirtualMachine()
 
-	// SECURITY FIX: popInt should panic on empty stack, not return 0
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Errorf("SECURITY ISSUE: popInt did not panic on empty stack! " +
-				"This would allow unlock_time=0 bypass")
-			return
-		}
+	// SECURITY FIX: popInt must return error on empty stack, not 0
+	_, err := vm.popInt()
+	require.Error(t, err, "SECURITY: popInt must return error on empty stack")
+	require.Contains(t, err.Error(), "SECURITY ERROR",
+		"Error message must indicate security violation")
 
-		// Verify panic message mentions security
-		panicMsg := fmt.Sprintf("%v", r)
-		if !strings.Contains(panicMsg, "SECURITY ERROR") {
-			t.Errorf("Expected security error panic, got: %v", r)
-		}
-
-		t.Logf("✅ SECURITY FIX VERIFIED: popInt correctly panics on empty stack: %v", r)
-	}()
-
-	// This should panic
-	vm.popInt()
-
-	t.Errorf("Should not reach here - popInt should have panicked!")
+	t.Logf("SECURITY FIX VERIFIED: popInt correctly returns error on empty stack: %v", err)
 }
 
 // ============================================

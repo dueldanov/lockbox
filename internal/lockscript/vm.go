@@ -107,8 +107,14 @@ func (vm *VirtualMachine) Execute(ctx context.Context, bytecode []byte, env *Env
 			vm.gasUsed += 5
 			
 		case OpAdd:
-			b := vm.popInt()
-			a := vm.popInt()
+			b, err := vm.popInt()
+			if err != nil {
+				return nil, err
+			}
+			a, err := vm.popInt()
+			if err != nil {
+				return nil, err
+			}
 			// SECURITY: Check for integer overflow
 			if (b > 0 && a > math.MaxInt64-b) || (b < 0 && a < math.MinInt64-b) {
 				return nil, errors.New("SECURITY ERROR: integer overflow in addition")
@@ -117,8 +123,14 @@ func (vm *VirtualMachine) Execute(ctx context.Context, bytecode []byte, env *Env
 			vm.gasUsed += 3
 
 		case OpSub:
-			b := vm.popInt()
-			a := vm.popInt()
+			b, err := vm.popInt()
+			if err != nil {
+				return nil, err
+			}
+			a, err := vm.popInt()
+			if err != nil {
+				return nil, err
+			}
 			// SECURITY: Check for integer overflow in subtraction
 			if (b < 0 && a > math.MaxInt64+b) || (b > 0 && a < math.MinInt64+b) {
 				return nil, errors.New("SECURITY ERROR: integer overflow in subtraction")
@@ -127,8 +139,14 @@ func (vm *VirtualMachine) Execute(ctx context.Context, bytecode []byte, env *Env
 			vm.gasUsed += 3
 
 		case OpMul:
-			b := vm.popInt()
-			a := vm.popInt()
+			b, err := vm.popInt()
+			if err != nil {
+				return nil, err
+			}
+			a, err := vm.popInt()
+			if err != nil {
+				return nil, err
+			}
 			// SECURITY: Check for integer overflow in multiplication
 			if a != 0 && b != 0 {
 				result := a * b
@@ -138,13 +156,19 @@ func (vm *VirtualMachine) Execute(ctx context.Context, bytecode []byte, env *Env
 			}
 			vm.push(a * b)
 			vm.gasUsed += 5
-			
+
 		case OpDiv:
-			b := vm.popInt()
+			b, err := vm.popInt()
+			if err != nil {
+				return nil, err
+			}
 			if b == 0 {
 				return nil, errors.New("division by zero")
 			}
-			a := vm.popInt()
+			a, err := vm.popInt()
+			if err != nil {
+				return nil, err
+			}
 			vm.push(a / b)
 			vm.gasUsed += 5
 			
@@ -161,50 +185,83 @@ func (vm *VirtualMachine) Execute(ctx context.Context, bytecode []byte, env *Env
 			vm.gasUsed += 3
 			
 		case OpLt:
-			b := vm.popInt()
-			a := vm.popInt()
+			b, err := vm.popInt()
+			if err != nil {
+				return nil, err
+			}
+			a, err := vm.popInt()
+			if err != nil {
+				return nil, err
+			}
 			vm.push(a < b)
 			vm.gasUsed += 3
-			
+
 		case OpGt:
-			b := vm.popInt()
-			a := vm.popInt()
+			b, err := vm.popInt()
+			if err != nil {
+				return nil, err
+			}
+			a, err := vm.popInt()
+			if err != nil {
+				return nil, err
+			}
 			vm.push(a > b)
 			vm.gasUsed += 3
-			
+
 		case OpAnd:
-			b := vm.popBool()
-			a := vm.popBool()
+			b, err := vm.popBool()
+			if err != nil {
+				return nil, err
+			}
+			a, err := vm.popBool()
+			if err != nil {
+				return nil, err
+			}
 			vm.push(a && b)
 			vm.gasUsed += 3
-			
+
 		case OpOr:
-			b := vm.popBool()
-			a := vm.popBool()
+			b, err := vm.popBool()
+			if err != nil {
+				return nil, err
+			}
+			a, err := vm.popBool()
+			if err != nil {
+				return nil, err
+			}
 			vm.push(a || b)
 			vm.gasUsed += 3
-			
+
 		case OpNot:
-			a := vm.popBool()
+			a, err := vm.popBool()
+			if err != nil {
+				return nil, err
+			}
 			vm.push(!a)
 			vm.gasUsed += 3
-			
+
 		case OpIf:
 			if pc+2 > len(bytecode) {
 				return nil, errors.New("invalid if operation")
 			}
 			jumpOffset := int(bytecode[pc])<<8 | int(bytecode[pc+1])
 			pc += 2
-			
-			condition := vm.popBool()
+
+			condition, err := vm.popBool()
+			if err != nil {
+				return nil, err
+			}
 			if !condition {
 				pc += jumpOffset
 			}
 			vm.gasUsed += 8
-			
+
 		case OpTimeCheck:
 			currentTime := time.Now().Unix()
-			requiredTime := vm.popInt()
+			requiredTime, err := vm.popInt()
+			if err != nil {
+				return nil, err
+			}
 			vm.push(currentTime >= requiredTime)
 			vm.gasUsed += 5
 			
@@ -266,40 +323,43 @@ func (vm *VirtualMachine) pop() interface{} {
 	return val
 }
 
-func (vm *VirtualMachine) popInt() int64 {
+func (vm *VirtualMachine) popInt() (int64, error) {
 	val := vm.pop()
 	if val == nil {
 		// SECURITY: Stack underflow should fail execution, not silently return 0
 		// Returning 0 allows bypass of time-lock checks (unlock_time = 0 allows immediate unlock)
-		panic("SECURITY ERROR: stack underflow in popInt - execution aborted")
+		return 0, errors.New("SECURITY ERROR: stack underflow in popInt - execution aborted")
 	}
 	switch v := val.(type) {
 	case int64:
-		return v
+		return v, nil
 	case int:
-		return int64(v)
+		return int64(v), nil
 	case bool:
 		if v {
-			return 1
+			return 1, nil
 		}
-		return 0
+		return 0, nil
 	default:
 		// SECURITY: Unknown type should fail, not default to 0
-		panic(fmt.Sprintf("SECURITY ERROR: invalid type %T for integer operation", val))
+		return 0, fmt.Errorf("SECURITY ERROR: invalid type %T for integer operation", val)
 	}
 }
 
-func (vm *VirtualMachine) popBool() bool {
+func (vm *VirtualMachine) popBool() (bool, error) {
 	val := vm.pop()
+	if val == nil {
+		return false, errors.New("SECURITY ERROR: stack underflow in popBool - execution aborted")
+	}
 	switch v := val.(type) {
 	case bool:
-		return v
+		return v, nil
 	case int64:
-		return v != 0
+		return v != 0, nil
 	case string:
-		return v != ""
+		return v != "", nil
 	default:
-		return false
+		return false, fmt.Errorf("SECURITY ERROR: invalid type %T for boolean operation", val)
 	}
 }
 

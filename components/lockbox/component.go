@@ -117,10 +117,14 @@ func configure() error {
 	grpcServer, err = service.NewGRPCServer(
 		lockboxSvc,
 		nil, // rateLimiter - uses default (5 req/min)
-		ParamsLockBox.GRPC.BindAddress,
-		ParamsLockBox.GRPC.TLSEnabled,
-		ParamsLockBox.GRPC.TLSCertPath,
-		ParamsLockBox.GRPC.TLSKeyPath,
+		service.GRPCServerConfig{
+			BindAddress:   ParamsLockBox.GRPC.BindAddress,
+			TLSEnabled:    ParamsLockBox.GRPC.TLSEnabled,
+			TLSCertPath:   ParamsLockBox.GRPC.TLSCertPath,
+			TLSKeyPath:    ParamsLockBox.GRPC.TLSKeyPath,
+			TLSCACertPath: ParamsLockBox.GRPC.TLSCACertPath,
+			DevMode:       ParamsLockBox.GRPC.DevMode,
+		},
 	)
 	if err != nil {
 		Component.LogErrorf("Failed to create gRPC server: %v", err)
@@ -151,10 +155,14 @@ func configure() error {
 		b2bServer, err = b2b.NewServer(
 			Component.App().NewLogger("B2B-gRPC"),
 			b2bSvc,
-			ParamsLockBox.B2B.GRPC.BindAddress,
-			ParamsLockBox.B2B.GRPC.TLSEnabled,
-			ParamsLockBox.B2B.GRPC.TLSCertPath,
-			ParamsLockBox.B2B.GRPC.TLSKeyPath,
+			b2b.B2BServerConfig{
+				BindAddress:   ParamsLockBox.B2B.GRPC.BindAddress,
+				TLSEnabled:    ParamsLockBox.B2B.GRPC.TLSEnabled,
+				TLSCertPath:   ParamsLockBox.B2B.GRPC.TLSCertPath,
+				TLSKeyPath:    ParamsLockBox.B2B.GRPC.TLSKeyPath,
+				TLSCACertPath: ParamsLockBox.B2B.GRPC.TLSCACertPath,
+				DevMode:       ParamsLockBox.B2B.GRPC.DevMode,
+			},
 		)
 		if err != nil {
 			Component.LogErrorf("Failed to create B2B gRPC server: %v", err)

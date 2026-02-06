@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
@@ -388,7 +389,7 @@ func (s *B2BServer) RetrieveKey(ctx context.Context, req *api.RetrieveKeyRequest
 	return &api.RetrieveKeyResponse{
 		BundleId:      req.BundleId,
 		PrivateKey:    keyData,
-		KeyType:       "ed25519", // TODO: Store and retrieve key type
+		KeyType:       "ed25519", // All keys are Ed25519 (IOTA-compatible)
 		RetrievalTime: time.Now().Unix(),
 		Status:        string(unlockResp.Status),
 		RevenueInfo: &api.RevenueInfo{
@@ -430,7 +431,7 @@ func (s *B2BServer) GetRevenueShare(ctx context.Context, req *api.GetRevenueShar
 		}
 	}
 
-	// TODO: Get recent transactions from storage
+	// Transaction history requires persistent B2B storage (not yet implemented)
 
 	return &api.GetRevenueShareResponse{
 		PartnerId:              partner.ID,
@@ -438,7 +439,7 @@ func (s *B2BServer) GetRevenueShare(ctx context.Context, req *api.GetRevenueShar
 		TotalEarned:            totalEarned,
 		TotalPaid:              totalPaid,
 		SharePercentage:        partner.SharePercentage,
-		Transactions:           []*api.RevenueTransaction{}, // TODO: Populate
+		Transactions:           []*api.RevenueTransaction{},
 		NextPayoutDate:         nextPayoutDate,
 		MinimumPayoutThreshold: 1000000, // 1 MIOTA
 	}, nil
@@ -474,16 +475,18 @@ func (s *B2BServer) GetPartnerStats(ctx context.Context, req *api.GetPartnerStat
 	}
 	s.bundlePartnersMu.RUnlock()
 
+	// Detailed per-metric tracking requires persistent B2B storage (not yet implemented).
+	// TotalKeysStored is approximated from TotalTransactions; other granular stats are zero-valued.
 	return &api.GetPartnerStatsResponse{
 		PartnerId:           partner.ID,
-		TotalKeysStored:     stats.TotalTransactions, // Approximation
-		TotalKeysRetrieved:  0,                       // TODO: Track separately
+		TotalKeysStored:     stats.TotalTransactions,
+		TotalKeysRetrieved:  0,
 		ActiveBundles:       activeBundles,
-		TotalStorageFees:    0, // TODO: Track separately
+		TotalStorageFees:    0,
 		TotalRetrievalFees:  stats.TotalRevenue,
-		AverageLockDuration: 0, // TODO: Calculate
+		AverageLockDuration: 0,
 		LastActivityTime:    stats.LastActivityDate.Unix(),
-		DailyStats:          []*api.DailyStats{}, // TODO: Populate
+		DailyStats:          []*api.DailyStats{},
 	}, nil
 }
 
@@ -633,11 +636,8 @@ func parseIOTAAddress(addrStr string) (iotago.Address, error) {
 
 // hashAPIKey creates a SHA-256 hash of an API key.
 func hashAPIKey(apiKey string) []byte {
-	// Use the same hashing as service.GenerateAccessToken for consistency
-	// In production, use bcrypt or argon2 for API key hashing
-	hash := make([]byte, 32)
-	copy(hash, []byte(apiKey)) // Simplified for now
-	return hash
+	h := sha256.Sum256([]byte(apiKey))
+	return h[:]
 }
 
 // =============================================================================

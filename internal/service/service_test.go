@@ -52,9 +52,10 @@ func (m *MockZKPProvider) VerifyUnlockProof(proof *interfaces.UnlockProof) error
 
 var initLoggerOnce sync.Once
 
-// initTestLogger initializes the global logger for tests
+// initTestLogger initializes the global logger for tests and enables dev mode.
 func initTestLogger() {
 	initLoggerOnce.Do(func() {
+		DevMode = true
 		cfg := configuration.New()
 		// Ignore error - global logger may already be initialized
 		_ = appLogger.InitGlobalLogger(cfg)

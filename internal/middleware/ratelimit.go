@@ -56,10 +56,12 @@ func getUserID(ctx context.Context) string {
 	return "anonymous"
 }
 
-// getUserTier gets user's tier
+// getUserTier gets user's tier from context or falls back to Basic.
+// The tier is expected to be set in context by the auth interceptor (e.g., from mTLS client cert metadata).
 func (r *RateLimitMiddleware) getUserTier(ctx context.Context, userID string) service.Tier {
-	// tiering.Manager doesn't have GetAccount method, return basic tier
-	// TODO: implement proper tier lookup when tiering.Manager is updated
+	if tier, ok := ctx.Value("userTier").(service.Tier); ok {
+		return tier
+	}
 	return service.TierBasic
 }
 

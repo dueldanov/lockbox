@@ -258,7 +258,10 @@ func (s *Service) LockAsset(ctx context.Context, req *LockAssetRequest) (*LockAs
 
 	// #4 generate_bundle_id - Creates unique transaction bundle ID
 	stepStart = time.Now()
-	assetID := s.generateAssetID()
+	assetID, err := s.generateAssetID()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate asset ID: %w", err)
+	}
 	log = log.WithBundleID(assetID)
 	log.LogStepWithDuration(logging.PhaseInputValidation, "generate_bundle_id",
 		fmt.Sprintf("bundleID=%s", assetID), time.Since(stepStart), nil)
@@ -1696,12 +1699,12 @@ func (s *Service) InitializeCompiler() error {
 
 // Helper methods
 
-func (s *Service) generateAssetID() string {
+func (s *Service) generateAssetID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand.Read failed: %v", err))
+		return "", fmt.Errorf("crypto/rand.Read failed: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 func (s *Service) serializeAssetData(req *LockAssetRequest) ([]byte, error) {
